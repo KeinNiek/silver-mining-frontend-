@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { useStore } from './useStore';
 import { PROGRAM_ID, TOKEN_DECIMALS, WARCHEST_WALLET, ADMIN_WALLET } from '../utils/constants';
 import { SEEDS, DISCRIMINATORS } from '../utils/idl';
@@ -442,7 +442,24 @@ export function useProgram() {
       
       const claimerAta = await getAssociatedTokenAddress(unrefinedMint, publicKey);
       
-      const instruction = new TransactionInstruction({
+      // Check if ATA exists, create if not
+      const ataInfo = await connection.getAccountInfo(claimerAta);
+      const instructions: TransactionInstruction[] = [];
+      
+      if (!ataInfo) {
+        // Create ATA instruction
+        instructions.push(
+          createAssociatedTokenAccountInstruction(
+            publicKey, // payer
+            claimerAta, // ata
+            publicKey, // owner
+            unrefinedMint // mint
+          )
+        );
+      }
+      
+      // Claim instruction
+      instructions.push(new TransactionInstruction({
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
           { pubkey: minerPDA, isSigner: false, isWritable: true },
@@ -455,9 +472,17 @@ export function useProgram() {
         ],
         programId: PROGRAM_ID,
         data: DISCRIMINATORS.claimBetSilver,
-      });
+      }));
       
-      await sendTx(instruction);
+      // Send all instructions in one transaction
+      const transaction = new Transaction().add(...instructions);
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+      
+      const signature = await sendTransaction(transaction, connection);
+      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      
       toast.success('UNREFINED tokens claimed!');
       await fetchBalances();
     } catch (error: any) {
@@ -470,7 +495,7 @@ export function useProgram() {
     } finally {
       setIsLoading(false);
     }
-  }, [publicKey, sendTx, fetchBalances, setIsLoading]);
+  }, [publicKey, connection, sendTransaction, fetchBalances, setIsLoading]);
 
   // Fetch autominer account data
   const fetchAutominer = useCallback(async () => {
