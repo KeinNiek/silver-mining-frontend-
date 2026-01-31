@@ -178,6 +178,7 @@ export function useProgram() {
       console.log('Current Round:', Number(currentRound));
       console.log('Round Start Time:', Number(roundStartTime));
       console.log('Motherlode Balance:', Number(motherlodeBalance));
+      console.log('Total Pools:', Number(totalPools));
       console.log('Initialized:', initialized);
       console.log('Authority:', authority.toBase58());
       
@@ -1101,8 +1102,14 @@ export function useProgram() {
       const configAccount = await connection.getAccountInfo(configPDA);
       if (!configAccount) throw new Error('Config not initialized');
       
-      const totalPools = configAccount.data.readBigUInt64LE(8 + 32 + 32 + 32 + 8 + 8 + 8 + 8 + 8);
+      // Read totalPools at correct offset:
+      // 8 (discriminator) + 32 (authority) + 32 (silverMint) + 32 (unrefinedMint) + 
+      // 8 (currentRound) + 8 (roundStartTime) + 8 (totalUnrefinedSupply) + 
+      // 8 (totalSilverSupply) + 8 (totalStaked) = 144
+      const totalPools = configAccount.data.readBigUInt64LE(144);
       const [poolPDA] = getPoolPDA(totalPools);
+      
+      console.log('Creating pool with:', { feeBps, mineLevel, totalPools: Number(totalPools), poolPDA: poolPDA.toBase58() });
       
       const data = Buffer.alloc(3);
       data.writeUInt16LE(feeBps, 0);
@@ -1120,20 +1127,34 @@ export function useProgram() {
         data: Buffer.concat([DISCRIMINATORS.createPool, data]),
       });
       
-      const transaction = new Transaction().add(instruction);
-      const signature = await sendTransaction(transaction, connection, { skipPreflight: true });
-      await connection.confirmTransaction(signature, 'confirmed');
-      
+      await sendTx(instruction);
       toast.success('Pool created!');
       await fetchConfig();
-      await fetchMiner(); // This now also fetches pool data
+      await fetchMiner();
     } catch (error: any) {
       console.error('Create pool failed:', error);
-      toast.error(error.message || 'Create pool failed');
+      console.error('Error logs:', error.logs);
+      
+      const errorMsg = error.message || error.toString();
+      if (errorMsg.includes('AlreadyInPool')) {
+        toast.error('You are already in a pool');
+      } else if (errorMsg.includes('MineNotUnlocked')) {
+        toast.error('You have not unlocked this mine level yet');
+      } else if (errorMsg.includes('InvalidFee')) {
+        toast.error('Fee must be 5% or less (500 bps max)');
+      } else if (errorMsg.includes('InvalidMineLevel')) {
+        toast.error('Invalid mine level');
+      } else if (error.logs) {
+        // Try to extract error from logs
+        const logError = error.logs.find((l: string) => l.includes('Error') || l.includes('failed'));
+        toast.error(logError || 'Create pool failed - check console');
+      } else {
+        toast.error('Create pool failed - check console');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [publicKey, connection, sendTransaction, fetchConfig, fetchMiner, setIsLoading]);
+  }, [publicKey, connection, sendTx, fetchConfig, fetchMiner, setIsLoading]);
 
   // Leave pool
   const leavePool = useCallback(async () => {

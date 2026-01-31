@@ -54,6 +54,7 @@ export default function Dashboard() {
   const [currentBet, setCurrentBet] = useState<any>(null);
   const [previousRoundBet, setPreviousRoundBet] = useState<any>(null);
   const [previousRoundData, setPreviousRoundData] = useState<any>(null);
+  const [displayedRoundBet, setDisplayedRoundBet] = useState<any>(null);
   
   // Stake tab state
   const [stakeAmount, setStakeAmount] = useState('');
@@ -135,9 +136,16 @@ export default function Dashboard() {
   useEffect(() => {
     const loadBets = async () => {
       if (config?.currentRound && wallet.publicKey) {
-        // Fetch current round bet
+        // Fetch current round bet (for new round, may be null)
         const bet = await fetchBet(config.currentRound);
         setCurrentBet(bet);
+        
+        // Fetch bet for the displayed round (the round shown in Round Results)
+        // This is important because after finalize, round.roundNumber updates
+        if (round?.roundNumber) {
+          const displayedBet = await fetchBet(round.roundNumber);
+          setDisplayedRoundBet(displayedBet);
+        }
         
         // Fetch previous round bet and data for claiming (if exists)
         if (config.currentRound > 1) {
@@ -165,7 +173,7 @@ export default function Dashboard() {
       }
     };
     loadBets();
-  }, [config?.currentRound, wallet.publicKey, fetchBet]);
+  }, [config?.currentRound, round?.roundNumber, wallet.publicKey, fetchBet]);
 
   // Check if betting is still open
   const bettingOpen = timeLeft > 0;
@@ -173,7 +181,9 @@ export default function Dashboard() {
   // Load pools when config changes or switching to pool tab
   useEffect(() => {
     const loadPools = async () => {
+      console.log('Loading pools, totalPools:', config?.totalPools);
       if (!config?.totalPools || config.totalPools === 0) {
+        console.log('No pools to load');
         setAvailablePools([]);
         return;
       }
@@ -181,14 +191,16 @@ export default function Dashboard() {
       try {
         const pools: any[] = [];
         const total = Math.min(Number(config.totalPools), 20);
+        console.log('Fetching', total, 'pools...');
         for (let i = 0; i < total; i++) {
           const poolData = await fetchPool(i);
+          console.log('Pool', i, ':', poolData);
           if (poolData && poolData.active) {
             pools.push({ id: i, ...poolData });
           }
         }
         setAvailablePools(pools);
-        console.log('Loaded pools:', pools.length);
+        console.log('Loaded pools:', pools.length, pools);
       } catch (error) {
         console.error('Failed to load pools:', error);
       } finally {
@@ -269,10 +281,13 @@ export default function Dashboard() {
   const handleCreatePool = async () => {
     const feeBps = Math.floor(parseFloat(poolFee) * 100);
     await createPool(feeBps, poolMineLevel);
+    // Wait a bit for blockchain state to update
+    await new Promise(r => setTimeout(r, 1000));
     // Refresh config to get updated totalPools
     await fetchConfig();
     await fetchMiner();
-    // Explicitly reload pools
+    // Wait and reload pools
+    await new Promise(r => setTimeout(r, 500));
     await loadAllPools();
   };
 
@@ -1252,17 +1267,17 @@ export default function Dashboard() {
                         {round.isSolo ? 'Solo Winner' : 'Split'}
                       </span>
                     </div>
-                    {currentBet && (
+                    {displayedRoundBet && (
                       <div className="flex justify-between text-sm">
                         <span className="text-silver-400">Your Bet:</span>
-                        <span className={`font-semibold ${currentBet.blocks[round.winningBlock] ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {currentBet.blocks[round.winningBlock] ? 'Won!' : 'Lost'}
+                        <span className={`font-semibold ${displayedRoundBet.blocks[round.winningBlock] ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {displayedRoundBet.blocks[round.winningBlock] ? 'Won!' : 'Lost'}
                         </span>
                       </div>
                     )}
                   </div>
                   
-                  {currentBet && currentBet.blocks[round.winningBlock] && !currentBet.claimed && (
+                  {displayedRoundBet && displayedRoundBet.blocks[round.winningBlock] && !displayedRoundBet.claimed && (
                     <button 
                       onClick={() => claimSol(round.roundNumber)}
                       className="btn-primary w-full flex items-center justify-center gap-2 mb-2"
@@ -1273,7 +1288,7 @@ export default function Dashboard() {
                     </button>
                   )}
                   
-                  {currentBet && currentBet.blocks[round.winningBlock] && !currentBet.silverClaimed && (
+                  {displayedRoundBet && displayedRoundBet.blocks[round.winningBlock] && !displayedRoundBet.silverClaimed && (
                     <button 
                       onClick={() => claimBetSilver(round.roundNumber)}
                       className="btn-secondary w-full flex items-center justify-center gap-2"
@@ -1284,23 +1299,37 @@ export default function Dashboard() {
                     </button>
                   )}
                   
-                  {currentBet && currentBet.blocks[round.winningBlock] && currentBet.claimed && currentBet.silverClaimed && (
+                  {displayedRoundBet && displayedRoundBet.blocks[round.winningBlock] && displayedRoundBet.claimed && displayedRoundBet.silverClaimed && (
                     <p className="text-center text-emerald-400 text-sm flex items-center justify-center gap-1">
                       <CheckIcon className="w-4 h-4" /> All rewards claimed
                     </p>
                   )}
                   
-                  {currentBet && !currentBet.blocks[round.winningBlock] && (
+                  {displayedRoundBet && !displayedRoundBet.blocks[round.winningBlock] && (
                     <p className="text-center text-silver-500 text-sm">
                       No rewards - did not bet on winning block
                     </p>
                   )}
                   
-                  {!currentBet && (
+                  {!displayedRoundBet && (
                     <p className="text-center text-silver-500 text-sm">
                       You did not bet this round
                     </p>
                   )}
+                </>
+              ) : (
+                <div className="text-center py-4">
+                  <p className="text-silver-400">Round in progress...</p>
+                  <p className="text-sm text-silver-500 mt-1">Pot: {formatSOL(round.totalPot)} SOL</p>
+                  {currentBet && (
+                    <p className="text-sm text-emerald-400 mt-2 flex items-center justify-center gap-1">
+                      <CheckIcon className="w-4 h-4" /> Bet placed: {formatSOL(currentBet.totalSol)} SOL
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
                 </>
               ) : (
                 <div className="text-center py-4">
