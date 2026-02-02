@@ -1330,20 +1330,6 @@ export default function Dashboard() {
               )}
             </div>
           )}
-                </>
-              ) : (
-                <div className="text-center py-4">
-                  <p className="text-silver-400">Round in progress...</p>
-                  <p className="text-sm text-silver-500 mt-1">Pot: {formatSOL(round.totalPot)} SOL</p>
-                  {currentBet && (
-                    <p className="text-sm text-emerald-400 mt-2 flex items-center justify-center gap-1">
-                      <CheckIcon className="w-4 h-4" /> Bet placed: {formatSOL(currentBet.totalSol)} SOL
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Previous Round Claims */}
           {previousRoundBet && previousRoundData && config?.currentRound && config.currentRound > 1 && previousRoundData.finalized && (
