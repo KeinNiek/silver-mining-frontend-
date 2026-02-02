@@ -300,9 +300,6 @@ export function useProgram() {
       const winningBlock = data.readUInt8(offset); offset += 1;
       const isSolo = data.readUInt8(offset) === 1; offset += 1;
       const soloWinner = new PublicKey(data.slice(offset, offset + 32)); offset += 32;
-      // FIX: Read solo_seed and solo_best_score that exist in deployed contract
-      const soloSeed = data.readBigUInt64LE(offset); offset += 8;
-      const soloBestScore = data.readBigUInt64LE(offset); offset += 8;
       const totalPot = data.readBigUInt64LE(offset); offset += 8;
       
       const blockTotals: number[] = [];
@@ -1576,7 +1573,7 @@ export function useProgram() {
     }
   }, [publicKey, connection, sendTx, fetchBalances, fetchAutominer]);
 
-  // Start auto-crank background process (with auto-finalize and auto-init-round)
+  // Start auto-crank background process
   const startAutoCrank = useCallback(() => {
     if (autoCrankIntervalRef.current) {
       return; // Already running
@@ -1601,97 +1598,10 @@ export function useProgram() {
         }
         
         const currentRound = Number(configAccount.data.readBigUInt64LE(8 + 32 + 32 + 32));
-        const roundStartTime = Number(configAccount.data.readBigInt64LE(8 + 32 + 32 + 32 + 8));
-        
-        // Check round status
-        const [roundPDA] = getRoundPDA(BigInt(currentRound));
-        const roundAccount = await connection.getAccountInfo(roundPDA);
-        
-        if (!roundAccount) {
-          // Round doesn't exist - try to initialize it
-          setAutoCrankStatus(`Initializing round ${currentRound}...`);
-          try {
-            const initInstruction = new TransactionInstruction({
-              keys: [
-                { pubkey: publicKey, isSigner: true, isWritable: true },
-                { pubkey: configPDA, isSigner: false, isWritable: true },
-                { pubkey: roundPDA, isSigner: false, isWritable: true },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-              ],
-              programId: PROGRAM_ID,
-              data: DISCRIMINATORS.initializeRound,
-            });
-            await sendTx(initInstruction);
-            setAutoCrankStatus(`✓ Round ${currentRound} initialized`);
-          } catch (e: any) {
-            setAutoCrankStatus(`Init round failed: ${e.message?.slice(0, 30) || 'error'}`);
-          }
-          return;
-        }
-        
-        // Check if round needs finalizing
-        const roundFinalized = roundAccount.data[8 + 8 + 8 + 8] === 1;
-        const endTimeOffset = 8 + 8 + 8; // disc + roundNum + startTime
-        const roundEndTime = Number(roundAccount.data.readBigInt64LE(endTimeOffset));
-        const now = Math.floor(Date.now() / 1000);
-        
-        if (!roundFinalized && roundEndTime > 0 && now >= roundEndTime) {
-          // Round ended but not finalized - auto-finalize it
-          setAutoCrankStatus(`Finalizing round ${currentRound}...`);
-          try {
-            const finalizeInstruction = new TransactionInstruction({
-              keys: [
-                { pubkey: publicKey, isSigner: true, isWritable: true },
-                { pubkey: configPDA, isSigner: false, isWritable: true },
-                { pubkey: roundPDA, isSigner: false, isWritable: true },
-                { pubkey: WARCHEST_WALLET, isSigner: false, isWritable: true },
-                { pubkey: ADMIN_WALLET, isSigner: false, isWritable: true },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-              ],
-              programId: PROGRAM_ID,
-              data: DISCRIMINATORS.finalizeRound,
-            });
-            await sendTx(finalizeInstruction);
-            setAutoCrankStatus(`✓ Round ${currentRound} finalized! Initializing next...`);
-            
-            // Wait briefly for state to update, then init next round
-            await new Promise(resolve => setTimeout(resolve, 500));
-            const updatedConfig = await connection.getAccountInfo(configPDA);
-            if (updatedConfig) {
-              const nextRound = updatedConfig.data.readBigUInt64LE(8 + 32 + 32 + 32);
-              const [nextRoundPDA] = getRoundPDA(nextRound);
-              const nextRoundAccount = await connection.getAccountInfo(nextRoundPDA);
-              if (!nextRoundAccount) {
-                const initInstruction = new TransactionInstruction({
-                  keys: [
-                    { pubkey: publicKey, isSigner: true, isWritable: true },
-                    { pubkey: configPDA, isSigner: false, isWritable: true },
-                    { pubkey: nextRoundPDA, isSigner: false, isWritable: true },
-                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                  ],
-                  programId: PROGRAM_ID,
-                  data: DISCRIMINATORS.initializeRound,
-                });
-                await sendTx(initInstruction);
-                setAutoCrankStatus(`✓ Round ${Number(nextRound)} started!`);
-              }
-            }
-          } catch (e: any) {
-            setAutoCrankStatus(`Finalize failed: ${e.message?.slice(0, 30) || 'error'}`);
-          }
-          return;
-        }
-        
-        // Round is active and not ended - try to place autominer bet
-        if (roundFinalized) {
-          setAutoCrankStatus(`Round ${currentRound} finalized, waiting for next...`);
-          return;
-        }
         
         // Check if we already cranked this round
         if (currentRound === lastCrankedRoundRef.current) {
-          const timeRemaining = roundEndTime > 0 ? Math.max(0, roundEndTime - now) : '?';
-          setAutoCrankStatus(`✓ Bet placed for round ${currentRound} (${timeRemaining}s left)`);
+          setAutoCrankStatus(`Waiting for round ${currentRound + 1}...`);
           return;
         }
         
@@ -1704,17 +1614,17 @@ export function useProgram() {
         }
         
         // Parse autominer
-        const amData = autominerAccount.data;
-        const enabled = amData[8 + 32] === 1;
-        const balance = Number(amData.readBigUInt64LE(8 + 32 + 1 + 1 + 1));
-        const amSolPerBlock = Number(amData.readBigUInt64LE(8 + 32 + 1 + 1 + 1 + 8));
+        const data = autominerAccount.data;
+        const enabled = data[8 + 32] === 1;
+        const balance = Number(data.readBigUInt64LE(8 + 32 + 1 + 1 + 1));
+        const solPerBlock = Number(data.readBigUInt64LE(8 + 32 + 1 + 1 + 1 + 8));
         
         if (!enabled) {
           setAutoCrankStatus('AutoMiner disabled');
           return;
         }
         
-        const requiredBalance = amSolPerBlock * 5 + 10000; // 5 blocks + crank incentive
+        const requiredBalance = solPerBlock * 5 + 10000; // 5 blocks + crank incentive
         if (balance < requiredBalance) {
           setAutoCrankStatus('Insufficient AutoMiner balance');
           return;
@@ -1750,7 +1660,7 @@ export function useProgram() {
     
     // Then run every 5 seconds
     autoCrankIntervalRef.current = setInterval(runCrank, 5000);
-  }, [publicKey, connection, crankAutominer, sendTx]);
+  }, [publicKey, connection, crankAutominer]);
 
   // Stop auto-crank
   const stopAutoCrank = useCallback(() => {

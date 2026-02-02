@@ -44,8 +44,6 @@ export default function Dashboard() {
     stopAutoCrank,
     autoCrankEnabled,
     autoCrankStatus,
-    triggerMotherlode,
-    claimRedistribution,
   } = useProgram();
 
   const [activeTab, setActiveTab] = useState('mine');
@@ -86,26 +84,21 @@ export default function Dashboard() {
   const totalBet = blocksCount * parseFloat(solPerBlock || '0');
   const winChance = (blocksCount / 5) * 100;
 
-  // Round timer effect - use round.endTime if available
+  // Round timer effect
   useEffect(() => {
+    if (!config?.roundStartTime) return;
+    
     const updateTimer = () => {
       const now = Math.floor(Date.now() / 1000);
-      if (round?.endTime && round.endTime > 0) {
-        // Use actual end time from round data
-        const remaining = Math.max(0, round.endTime - now);
-        setTimeLeft(remaining);
-      } else if (config?.roundStartTime) {
-        // Fallback to calculated end time
-        const elapsed = now - config.roundStartTime;
-        const remaining = Math.max(0, ROUND_DURATION - elapsed);
-        setTimeLeft(remaining);
-      }
+      const elapsed = now - config.roundStartTime;
+      const remaining = Math.max(0, ROUND_DURATION - elapsed);
+      setTimeLeft(remaining);
     };
     
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [config?.roundStartTime, round?.endTime]);
+  }, [config?.roundStartTime]);
 
   // Refresh all data periodically (every 3s for responsive UI)
   useEffect(() => {
@@ -381,18 +374,6 @@ export default function Dashboard() {
 
   return (
     <div className="py-8">
-      {/* Paused Banner */}
-      {config?.paused && (
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center gap-3"
-        >
-          <AlertIcon className="w-5 h-5 text-red-400" />
-          <p className="text-red-400 font-semibold">Protocol is paused by admin. Mining and betting are temporarily disabled.</p>
-        </motion.div>
-      )}
-
       {/* Initialize Miner Banner */}
       {!miner && (
         <motion.div
@@ -768,34 +749,6 @@ export default function Dashboard() {
               >
                 {isLoading ? 'Processing...' : 'Refine All UNREFINED'}
               </button>
-
-              {/* Redistribution Pool */}
-              <div className="mt-6 border-t border-silver-800/50 pt-6">
-                <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-                  <GemIcon className="w-5 h-5 text-copper-400" />
-                  Redistribution Pool
-                </h3>
-                <div className="grid grid-cols-2 gap-3 mb-4">
-                  <div className="p-3 bg-silver-900/50 rounded-lg">
-                    <p className="text-silver-500 text-xs">Pool Balance</p>
-                    <p className="text-copper-400 font-semibold">{formatAmount(config?.redistributionPool || 0)} SILVER</p>
-                  </div>
-                  <div className="p-3 bg-silver-900/50 rounded-lg">
-                    <p className="text-silver-500 text-xs">Your UNREFINED Holdings</p>
-                    <p className="text-white font-semibold">{formatAmount(balances.unrefined)}</p>
-                  </div>
-                </div>
-                <p className="text-silver-500 text-sm mb-3">
-                  Claim your share of the redistribution pool based on your UNREFINED token holdings.
-                </p>
-                <button
-                  onClick={claimRedistribution}
-                  className="btn-secondary w-full"
-                  disabled={isLoading || (config?.redistributionPool || 0) <= 0}
-                >
-                  {isLoading ? 'Claiming...' : 'Claim Redistribution Rewards'}
-                </button>
-              </div>
             </div>
           )}
 
@@ -1186,7 +1139,7 @@ export default function Dashboard() {
                     )}
                     
                     <p className="text-silver-400 text-sm mb-4">
-                      Automatically finalize rounds, start new rounds, and place bets every round without manual intervention.
+                      Automatically place bets every round without manual intervention.
                     </p>
                     
                     {!autoCrankEnabled ? (
@@ -1233,44 +1186,18 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Motherlode Section */}
-              {config && (
+              {/* Motherlode Section - Display only, auto-pays on hit */}
+              {config && config.motherlodeBalance > 0 && (
                 <div className="mt-6 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between">
                     <h4 className="text-amber-400 font-semibold flex items-center gap-2">
                       <TrophyIcon className="w-4 h-4" />
                       Motherlode Jackpot
                     </h4>
                     <span className="text-amber-300 font-bold">{formatSOL(config.motherlodeBalance)} SOL</span>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 mb-3">
-                    <div className="p-2 bg-silver-900/50 rounded-lg">
-                      <p className="text-silver-500 text-xs">Target Round</p>
-                      <p className="text-amber-400 font-semibold">{config.motherlodeTarget}</p>
-                    </div>
-                    <div className="p-2 bg-silver-900/50 rounded-lg">
-                      <p className="text-silver-500 text-xs">Rounds Until Hit</p>
-                      <p className="text-amber-400 font-semibold">
-                        {config.motherlodeTarget > config.currentRound 
-                          ? config.motherlodeTarget - config.currentRound 
-                          : 'NOW!'}
-                      </p>
-                    </div>
-                  </div>
-                  {config.currentRound >= config.motherlodeTarget && config.motherlodeBalance > 0 && (
-                    <button
-                      onClick={triggerMotherlode}
-                      className="w-full py-3 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-2"
-                      disabled={isLoading}
-                    >
-                      <TrophyIcon className="w-5 h-5" />
-                      {isLoading ? 'Triggering...' : 'Trigger Motherlode!'}
-                    </button>
-                  )}
-                  <p className="text-silver-500 text-xs mt-2">
-                    {config.currentRound >= config.motherlodeTarget 
-                      ? 'The motherlode is ready! Click to claim the jackpot!'
-                      : 'Auto-pays to the triggerer when the target round hits.'}
+                  <p className="text-silver-400 text-xs mt-2">
+                    Auto-pays to a lucky winner when the jackpot round hits.
                   </p>
                 </div>
               )}
@@ -1389,6 +1316,20 @@ export default function Dashboard() {
                       You did not bet this round
                     </p>
                   )}
+                </>
+              ) : (
+                <div className="text-center py-4">
+                  <p className="text-silver-400">Round in progress...</p>
+                  <p className="text-sm text-silver-500 mt-1">Pot: {formatSOL(round.totalPot)} SOL</p>
+                  {currentBet && (
+                    <p className="text-sm text-emerald-400 mt-2 flex items-center justify-center gap-1">
+                      <CheckIcon className="w-4 h-4" /> Bet placed: {formatSOL(currentBet.totalSol)} SOL
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
                 </>
               ) : (
                 <div className="text-center py-4">
