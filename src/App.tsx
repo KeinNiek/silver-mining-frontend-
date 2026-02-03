@@ -107,13 +107,15 @@ export default function App() {
         <WalletModalProvider>
           <AppContent />
           <Toaster
-            position="bottom-right"
+            position="bottom-center"
             toastOptions={{
               duration: 4000,
               style: {
                 background: '#18181b',
                 color: '#e4e4e7',
                 border: '1px solid rgba(205, 127, 90, 0.3)',
+                maxWidth: '90vw',
+                fontSize: '0.875rem',
               },
               success: { iconTheme: { primary: '#10b981', secondary: '#18181b' } },
               error: { iconTheme: { primary: '#ef4444', secondary: '#18181b' } },

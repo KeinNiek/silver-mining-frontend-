@@ -250,9 +250,13 @@ body {
     background: linear-gradient(135deg, var(--accent-500), var(--accent-700));
     border: 1px solid rgba(var(--accent-rgb), 0.15);
     border-radius: 0.75rem;
-    padding: 1.5rem;
+    padding: 0.75rem;
     color: white;
     box-shadow: 0 10px 40px rgba(var(--accent-rgb), 0.18);
+  }
+
+  @media (min-width: 640px) {
+    .stat-card-copper { padding: 1.5rem; }
   }
 
   .glow-copper { box-shadow: 0 0 80px rgba(var(--accent-rgb), 0.1); }
@@ -284,6 +288,36 @@ body {
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 input[type="number"] { -moz-appearance: textfield; }
+
+/* Hide scrollbar for tab navigation */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Mobile safe area padding */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Prevent text overflow on small screens */
+.truncate-mobile {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fix wallet adapter button on mobile */
+@media (max-width: 640px) {
+  .wallet-adapter-button {
+    font-size: 0.75rem !important;
+    padding: 0.5rem 0.75rem !important;
+    border-radius: 0.5rem !important;
+  }
+  .wallet-adapter-button-trigger {
+    max-width: 160px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+}
 
 .wallet-adapter-button {
   background: linear-gradient(135deg, var(--accent-500), var(--accent-600)) !important;

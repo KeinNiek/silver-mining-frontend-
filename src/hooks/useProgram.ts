@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transaction, TransactionInstruction, ComputeBudgetProgram } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { useStore } from './useStore';
 import { PROGRAM_ID, TOKEN_DECIMALS, WARCHEST_WALLET, ADMIN_WALLET } from '../utils/constants';
@@ -55,7 +55,7 @@ export function useProgram() {
         skipPreflight: true, // Skip simulation to see actual error
       });
       
-      console.log('Transaction sent:', signature);
+      // Transaction sent
       
       const confirmation = await connection.confirmTransaction({
         signature,
@@ -122,7 +122,7 @@ export function useProgram() {
       const accountInfo = await connection.getAccountInfo(configPDA);
       
       if (!accountInfo) {
-        console.log('Config not initialized');
+        // Config not initialized yet
         return;
       }
       
@@ -173,15 +173,7 @@ export function useProgram() {
         paused,
       });
       
-      // Debug logging
-      console.log('=== Config State ===');
-      console.log('Current Round:', Number(currentRound));
-      console.log('Round Start Time:', Number(roundStartTime));
-      console.log('Motherlode Balance:', Number(motherlodeBalance));
-      console.log('Total Pools:', Number(totalPools));
-      console.log('Initialized:', initialized);
-      console.log('Authority:', authority.toBase58());
-      
+      // Config loaded successfully
     } catch (error) {
       console.error('Failed to fetch config:', error);
     }
@@ -195,7 +187,7 @@ export function useProgram() {
       const accountInfo = await connection.getAccountInfo(minerPDA);
       
       if (!accountInfo) {
-        console.log('Miner not initialized');
+        // Miner not initialized
         setMiner(null);
         return;
       }
@@ -286,7 +278,7 @@ export function useProgram() {
       const accountInfo = await connection.getAccountInfo(roundPDA);
       
       if (!accountInfo) {
-        console.log('Round not found');
+        // Round not found
         return;
       }
       
@@ -300,6 +292,9 @@ export function useProgram() {
       const winningBlock = data.readUInt8(offset); offset += 1;
       const isSolo = data.readUInt8(offset) === 1; offset += 1;
       const soloWinner = new PublicKey(data.slice(offset, offset + 32)); offset += 32;
+      // FIX: Skip solo_seed and solo_best_score that exist in deployed contract
+      offset += 8; // solo_seed
+      offset += 8; // solo_best_score
       const totalPot = data.readBigUInt64LE(offset); offset += 8;
       
       const blockTotals: number[] = [];
@@ -324,13 +319,7 @@ export function useProgram() {
         bump,
       });
       
-      // Debug logging
-      console.log('=== Round State ===');
-      console.log('Round Number:', Number(roundNum));
-      console.log('Finalized:', finalized);
-      console.log('Total Pot:', Number(totalPot));
-      console.log('Winning Block:', winningBlock);
-      
+      // Round loaded successfully
     } catch (error) {
       console.error('Failed to fetch round:', error);
     }
@@ -400,7 +389,7 @@ export function useProgram() {
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
           { pubkey: minerPDA, isSigner: false, isWritable: true },
-          { pubkey: configPDA, isSigner: false, isWritable: false },
+          { pubkey: configPDA, isSigner: false, isWritable: true },
           { pubkey: roundPDA, isSigner: false, isWritable: true },
           { pubkey: betPDA, isSigner: false, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -498,6 +487,174 @@ export function useProgram() {
     }
   }, [publicKey, connection, sendTransaction, fetchBalances, setIsLoading]);
 
+  // Claim ALL unclaimed rewards (SOL + UNREFINED) across all rounds
+  // Uses signAllTransactions so user only approves ONCE regardless of how many rounds
+  const claimAllRewards_auto = useCallback(async () => {
+    if (!publicKey) {
+      toast.error('Please connect your wallet');
+      return;
+    }
+    if (!wallet.signAllTransactions) {
+      toast.error('Wallet does not support batch signing');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      toast('Scanning for unclaimed rewards...', { icon: '🔍' });
+
+      // Step 1: Find all bet accounts for this user using discriminator filter
+      const betAccounts = await connection.getProgramAccounts(PROGRAM_ID, {
+        filters: [
+          { memcmp: { offset: 0, bytes: 'RbxjeDxFruM' } }, // Bet account discriminator
+          { memcmp: { offset: 8, bytes: publicKey.toBase58() } }, // miner field
+        ],
+      });
+
+      if (betAccounts.length === 0) {
+        toast.error('No bets found to claim');
+        setIsLoading(false);
+        return;
+      }
+
+      // Step 2: Parse bet accounts — need to figure out actual field offsets from on-chain data
+      // Bet struct: 8 disc + 32 miner + 8 round + 1 mine_level + 5 blocks + 8 sol_per_block + 8 total_sol + 1 claimed + 1 silver_claimed + 1 bump
+      const unclaimed: { round: bigint; totalSol: bigint; solClaimed: boolean; silverClaimed: boolean; betPDA: PublicKey }[] = [];
+      
+      for (const { pubkey, account } of betAccounts) {
+        const data = account.data;
+        // Offsets: disc(8) + miner(32) = 40 for round
+        const round = data.readBigUInt64LE(40);
+        // 40 + round(8) + mine_level(1) + blocks(5) = 54 for sol_per_block
+        // 54 + sol_per_block(8) = 62 for total_sol
+        const totalSol = data.readBigUInt64LE(62);
+        // 62 + total_sol(8) = 70 for claimed
+        const solClaimed = data[70] === 1;
+        const silverClaimed = data[71] === 1;
+        
+        if (!solClaimed || !silverClaimed) {
+          unclaimed.push({ round, totalSol, solClaimed, silverClaimed, betPDA: pubkey });
+        }
+      }
+
+      if (unclaimed.length === 0) {
+        toast.success('All rewards already claimed!');
+        setIsLoading(false);
+        return;
+      }
+
+      // Sort by round (oldest first)
+      unclaimed.sort((a, b) => Number(a.round - b.round));
+
+      const [configPDA] = getConfigPDA();
+      const [minerPDA] = getMinerPDA(publicKey);
+      const [unrefinedMint] = getUnrefinedMintPDA();
+      const claimerAta = await getAssociatedTokenAddress(unrefinedMint, publicKey);
+
+      const ataInfo = await connection.getAccountInfo(claimerAta);
+      const needsAta = !ataInfo && unclaimed.some(u => !u.silverClaimed);
+
+      // Step 3: Build ALL transactions upfront
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      const allTxs: Transaction[] = [];
+      const CLAIMS_PER_TX = 3;
+      let totalClaimedSol = 0;
+      
+      for (let i = 0; i < unclaimed.length; i += CLAIMS_PER_TX) {
+        const batch = unclaimed.slice(i, i + CLAIMS_PER_TX);
+        const tx = new Transaction();
+        
+        tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }));
+
+        // Add ATA creation only on first TX if needed
+        if (i === 0 && needsAta) {
+          tx.add(createAssociatedTokenAccountInstruction(
+            publicKey, claimerAta, publicKey, unrefinedMint
+          ));
+        }
+
+        for (const bet of batch) {
+          const [roundPDA] = getRoundPDA(bet.round);
+
+          if (!bet.solClaimed) {
+            tx.add(new TransactionInstruction({
+              keys: [
+                { pubkey: publicKey, isSigner: true, isWritable: true },
+                { pubkey: minerPDA, isSigner: false, isWritable: true },
+                { pubkey: configPDA, isSigner: false, isWritable: true },
+                { pubkey: roundPDA, isSigner: false, isWritable: true },
+                { pubkey: bet.betPDA, isSigner: false, isWritable: true },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+              ],
+              programId: PROGRAM_ID,
+              data: DISCRIMINATORS.claimSol,
+            }));
+            totalClaimedSol += Number(bet.totalSol);
+          }
+
+          if (!bet.silverClaimed) {
+            tx.add(new TransactionInstruction({
+              keys: [
+                { pubkey: publicKey, isSigner: true, isWritable: true },
+                { pubkey: minerPDA, isSigner: false, isWritable: true },
+                { pubkey: configPDA, isSigner: false, isWritable: true },
+                { pubkey: roundPDA, isSigner: false, isWritable: true },
+                { pubkey: bet.betPDA, isSigner: false, isWritable: true },
+                { pubkey: unrefinedMint, isSigner: false, isWritable: true },
+                { pubkey: claimerAta, isSigner: false, isWritable: true },
+                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+              ],
+              programId: PROGRAM_ID,
+              data: DISCRIMINATORS.claimBetSilver,
+            }));
+          }
+        }
+
+        tx.recentBlockhash = blockhash;
+        tx.feePayer = publicKey;
+        allTxs.push(tx);
+      }
+
+      // Step 4: Sign ALL transactions at once — ONE wallet popup
+      toast(`Approve ${allTxs.length} transaction${allTxs.length > 1 ? 's' : ''} to claim ${unclaimed.length} rounds`, { icon: '✍️' });
+      const signedTxs = await wallet.signAllTransactions(allTxs);
+
+      // Step 5: Send all signed TXs
+      let totalClaimedCount = 0;
+      const sendPromises = signedTxs.map(async (signedTx, idx) => {
+        try {
+          const rawTx = signedTx.serialize();
+          const sig = await connection.sendRawTransaction(rawTx, { skipPreflight: true });
+          await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+          const batchSize = unclaimed.slice(idx * CLAIMS_PER_TX, (idx + 1) * CLAIMS_PER_TX).length;
+          totalClaimedCount += batchSize;
+        } catch (err: any) {
+          console.error(`Claim batch ${idx + 1} failed:`, err);
+        }
+      });
+
+      await Promise.all(sendPromises);
+
+      if (totalClaimedCount > 0) {
+        const solAmount = (totalClaimedSol / 1e9).toFixed(4);
+        toast.success(`Claimed rewards from ${totalClaimedCount} rounds (~${solAmount} SOL + UNREFINED)`);
+      } else {
+        toast.error('Claims failed — some rounds may not be finalized yet');
+      }
+
+      await fetchBalances();
+      await fetchMiner();
+    } catch (error: any) {
+      console.error('Claim all rewards failed:', error);
+      if (error.message?.includes('User rejected')) {
+        toast.error('Transaction cancelled');
+      } else {
+        toast.error(error.message?.slice(0, 100) || 'Claim failed');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publicKey, connection, wallet, fetchBalances, fetchMiner, setIsLoading]);
+
   // Fetch autominer account data
   const fetchAutominer = useCallback(async () => {
     if (!publicKey) return;
@@ -506,7 +663,7 @@ export function useProgram() {
       const accountInfo = await connection.getAccountInfo(autominerPDA);
       
       if (!accountInfo) {
-        console.log('AutoMiner not setup');
+        // AutoMiner not setup
         setAutominer(null);
         return;
       }
@@ -556,20 +713,16 @@ export function useProgram() {
       const [silverMint] = getSilverMintPDA();
       const [unrefinedMint] = getUnrefinedMintPDA();
       
-      console.log('Initialize protocol...');
-      console.log('Config PDA:', configPDA.toBase58());
-      console.log('Silver Mint:', silverMint.toBase58());
-      console.log('Unrefined Mint:', unrefinedMint.toBase58());
       
       // Check if already initialized
       const configAccount = await connection.getAccountInfo(configPDA);
       if (configAccount) {
-        console.log('Protocol already initialized');
+        // Already initialized
         toast.error('Protocol already initialized!');
         return;
       }
       
-      console.log('Protocol not initialized, creating...');
+
       
       const instruction = new TransactionInstruction({
         keys: [
@@ -638,7 +791,6 @@ export function useProgram() {
     setIsLoading(true);
     try {
       const [configPDA] = getConfigPDA();
-      console.log('Config PDA:', configPDA.toBase58());
       
       const configAccount = await connection.getAccountInfo(configPDA);
       if (!configAccount) {
@@ -647,10 +799,7 @@ export function useProgram() {
       }
       
       const currentRound = configAccount.data.readBigUInt64LE(8 + 32 + 32 + 32);
-      console.log('Current round from config:', currentRound.toString());
-      
       const [roundPDA] = getRoundPDA(currentRound);
-      console.log('Round PDA to create:', roundPDA.toBase58());
       
       // Check if round already exists
       const existingRound = await connection.getAccountInfo(roundPDA);
@@ -658,8 +807,6 @@ export function useProgram() {
         toast.error(`Round ${currentRound.toString()} already exists! Need to finalize first.`);
         return;
       }
-      
-      console.log('Round does not exist, creating...');
       
       const instruction = new TransactionInstruction({
         keys: [
@@ -880,6 +1027,16 @@ export function useProgram() {
       const data = Buffer.alloc(8);
       data.writeBigUInt64LE(lamports);
       
+      // Ensure staking vault ATA exists (first stake ever creates it)
+      const transaction = new Transaction();
+      try {
+        await connection.getTokenAccountBalance(stakingVault);
+      } catch {
+        transaction.add(
+          createAssociatedTokenAccountInstruction(publicKey, stakingVault, configPDA, silverMint)
+        );
+      }
+      
       const instruction = new TransactionInstruction({
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
@@ -893,7 +1050,7 @@ export function useProgram() {
         data: Buffer.concat([DISCRIMINATORS.stake, data]),
       });
       
-      const transaction = new Transaction().add(instruction);
+      transaction.add(instruction);
       const signature = await sendTransaction(transaction, connection, { skipPreflight: true });
       await connection.confirmTransaction(signature, 'confirmed');
       
@@ -969,6 +1126,16 @@ export function useProgram() {
       
       const ownerSilverAta = await getAssociatedTokenAddress(silverMint, publicKey);
       
+      // Ensure SILVER ATA exists (rewards mint to it)
+      const transaction = new Transaction();
+      try {
+        await connection.getTokenAccountBalance(ownerSilverAta);
+      } catch {
+        transaction.add(
+          createAssociatedTokenAccountInstruction(publicKey, ownerSilverAta, publicKey, silverMint)
+        );
+      }
+      
       const instruction = new TransactionInstruction({
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
@@ -982,7 +1149,7 @@ export function useProgram() {
         data: DISCRIMINATORS.claimStakingRewards,
       });
       
-      const transaction = new Transaction().add(instruction);
+      transaction.add(instruction);
       const signature = await sendTransaction(transaction, connection, { skipPreflight: true });
       await connection.confirmTransaction(signature, 'confirmed');
       
@@ -1013,6 +1180,16 @@ export function useProgram() {
       const ownerSilverAta = await getAssociatedTokenAddress(silverMint, publicKey);
       const ownerUnrefinedAta = await getAssociatedTokenAddress(unrefinedMint, publicKey);
       
+      // Ensure SILVER ATA exists (first refine creates it)
+      const transaction = new Transaction();
+      try {
+        await connection.getTokenAccountBalance(ownerSilverAta);
+      } catch {
+        transaction.add(
+          createAssociatedTokenAccountInstruction(publicKey, ownerSilverAta, publicKey, silverMint)
+        );
+      }
+      
       const instruction = new TransactionInstruction({
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
@@ -1028,7 +1205,7 @@ export function useProgram() {
         data: DISCRIMINATORS.refine,
       });
       
-      const transaction = new Transaction().add(instruction);
+      transaction.add(instruction);
       const signature = await sendTransaction(transaction, connection, { skipPreflight: true });
       await connection.confirmTransaction(signature, 'confirmed');
       
@@ -1059,6 +1236,16 @@ export function useProgram() {
       const ownerSilverAta = await getAssociatedTokenAddress(silverMint, publicKey);
       const ownerUnrefinedAta = await getAssociatedTokenAddress(unrefinedMint, publicKey);
       
+      // Ensure SILVER ATA exists
+      const transaction = new Transaction();
+      try {
+        await connection.getTokenAccountBalance(ownerSilverAta);
+      } catch {
+        transaction.add(
+          createAssociatedTokenAccountInstruction(publicKey, ownerSilverAta, publicKey, silverMint)
+        );
+      }
+      
       const instruction = new TransactionInstruction({
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
@@ -1073,7 +1260,7 @@ export function useProgram() {
         data: DISCRIMINATORS.claimRedistribution,
       });
       
-      const transaction = new Transaction().add(instruction);
+      transaction.add(instruction);
       const signature = await sendTransaction(transaction, connection, { skipPreflight: true });
       await connection.confirmTransaction(signature, 'confirmed');
       
@@ -1102,14 +1289,28 @@ export function useProgram() {
       const configAccount = await connection.getAccountInfo(configPDA);
       if (!configAccount) throw new Error('Config not initialized');
       
+      // Verify miner account exists (required by contract)
+      const minerAccount = await connection.getAccountInfo(minerPDA);
+      if (!minerAccount) {
+        toast.error('Initialize your miner first (place a bet or click Initialize Miner)');
+        setIsLoading(false);
+        return;
+      }
+      
+      // Check if miner is already in a pool
+      const isInPool = minerAccount.data[8 + 32 + 1 + 8 + 32] === 1;
+      if (isInPool) {
+        toast.error('You are already in a pool. Leave your current pool first.');
+        setIsLoading(false);
+        return;
+      }
+      
       // Read totalPools at correct offset:
       // 8 (discriminator) + 32 (authority) + 32 (silverMint) + 32 (unrefinedMint) + 
       // 8 (currentRound) + 8 (roundStartTime) + 8 (totalUnrefinedSupply) + 
       // 8 (totalSilverSupply) + 8 (totalStaked) = 144
       const totalPools = configAccount.data.readBigUInt64LE(144);
       const [poolPDA] = getPoolPDA(totalPools);
-      
-      console.log('Creating pool with:', { feeBps, mineLevel, totalPools: Number(totalPools), poolPDA: poolPDA.toBase58() });
       
       const data = Buffer.alloc(3);
       data.writeUInt16LE(feeBps, 0);
@@ -1127,8 +1328,46 @@ export function useProgram() {
         data: Buffer.concat([DISCRIMINATORS.createPool, data]),
       });
       
-      await sendTx(instruction);
-      toast.success('Pool created!');
+      // Pool account is ~3246 bytes (100 members) — needs high compute budget
+      // Include both CU limit AND priority fee so wallet doesn't inject/override anything
+      const transaction = new Transaction()
+        .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }))
+        .add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 5000 }))
+        .add(instruction);
+      
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+      
+      // Simulate first to get program logs if it fails
+      const simResult = await connection.simulateTransaction(transaction);
+      if (simResult.value.err) {
+        console.error('Pool creation simulation failed:', simResult.value.err);
+        console.error('Program logs:', simResult.value.logs);
+        // Show the actual program error to help debug
+        const logs = simResult.value.logs || [];
+        const errorLog = logs.find((l: string) => l.includes('Error') || l.includes('failed') || l.includes('panicked'));
+        throw new Error(errorLog || `Simulation failed: ${JSON.stringify(simResult.value.err)}`);
+      }
+      
+      // Sign and send — use signTransaction to prevent wallet from modifying our CU instructions
+      let signature: string;
+      if (wallet.signTransaction) {
+        const signedTx = await wallet.signTransaction(transaction);
+        signature = await connection.sendRawTransaction(signedTx.serialize(), { 
+          skipPreflight: true,
+          maxRetries: 3,
+        });
+      } else {
+        signature = await sendTransaction(transaction, connection, { skipPreflight: true });
+      }
+      const confirmation = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+      }
+      
+      toast.success('Pool created! Pool ID: ' + Number(totalPools));
       await fetchConfig();
       await fetchMiner();
     } catch (error: any) {
@@ -1137,24 +1376,25 @@ export function useProgram() {
       
       const errorMsg = error.message || error.toString();
       if (errorMsg.includes('AlreadyInPool')) {
-        toast.error('You are already in a pool');
+        toast.error('You are already in a pool. Leave your current pool first.');
       } else if (errorMsg.includes('MineNotUnlocked')) {
         toast.error('You have not unlocked this mine level yet');
       } else if (errorMsg.includes('InvalidFee')) {
         toast.error('Fee must be 5% or less (500 bps max)');
       } else if (errorMsg.includes('InvalidMineLevel')) {
         toast.error('Invalid mine level');
+      } else if (errorMsg.includes('0x1')) {
+        toast.error('Insufficient SOL — pool creation requires ~0.025 SOL for rent');
       } else if (error.logs) {
-        // Try to extract error from logs
         const logError = error.logs.find((l: string) => l.includes('Error') || l.includes('failed'));
-        toast.error(logError || 'Create pool failed - check console');
+        toast.error(logError || 'Create pool failed — check console for details');
       } else {
-        toast.error('Create pool failed - check console');
+        toast.error(errorMsg.slice(0, 120));
       }
     } finally {
       setIsLoading(false);
     }
-  }, [publicKey, connection, sendTx, fetchConfig, fetchMiner, setIsLoading]);
+  }, [publicKey, connection, wallet, sendTransaction, fetchConfig, fetchMiner, setIsLoading]);
 
   // Leave pool
   const leavePool = useCallback(async () => {
@@ -1573,7 +1813,8 @@ export function useProgram() {
     }
   }, [publicKey, connection, sendTx, fetchBalances, fetchAutominer]);
 
-  // Start auto-crank background process
+  // Start auto-crank background process (with auto-finalize and auto-init-round)
+  // BATCHED: finalize + init + crank all in ONE transaction = 1 wallet popup per round
   const startAutoCrank = useCallback(() => {
     if (autoCrankIntervalRef.current) {
       return; // Already running
@@ -1599,13 +1840,144 @@ export function useProgram() {
         
         const currentRound = Number(configAccount.data.readBigUInt64LE(8 + 32 + 32 + 32));
         
-        // Check if we already cranked this round
-        if (currentRound === lastCrankedRoundRef.current) {
-          setAutoCrankStatus(`Waiting for round ${currentRound + 1}...`);
+        // Check round status
+        const [roundPDA] = getRoundPDA(BigInt(currentRound));
+        const roundAccount = await connection.getAccountInfo(roundPDA);
+        
+        // Build a batch of instructions for ONE transaction
+        const batchInstructions: TransactionInstruction[] = [];
+        let description = '';
+        
+        if (!roundAccount) {
+          // Round doesn't exist - initialize it
+          batchInstructions.push(new TransactionInstruction({
+            keys: [
+              { pubkey: publicKey, isSigner: true, isWritable: true },
+              { pubkey: configPDA, isSigner: false, isWritable: true },
+              { pubkey: roundPDA, isSigner: false, isWritable: true },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            ],
+            programId: PROGRAM_ID,
+            data: DISCRIMINATORS.initializeRound,
+          }));
+          description = `Init round ${currentRound}`;
+          
+          // Send just the init, next cycle will handle betting
+          setAutoCrankStatus(`Initializing round ${currentRound}...`);
+          try {
+            const tx = new Transaction().add(...batchInstructions);
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+            tx.recentBlockhash = blockhash;
+            tx.feePayer = publicKey;
+            const sig = await sendTransaction(tx, connection, { skipPreflight: true });
+            await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+            setAutoCrankStatus(`✓ Round ${currentRound} initialized`);
+          } catch (e: any) {
+            setAutoCrankStatus(`Init failed: ${e.message?.slice(0, 30) || 'error'}`);
+          }
           return;
         }
         
-        // Fetch autominer
+        // Round exists — check its state
+        const roundFinalized = roundAccount.data[8 + 8 + 8 + 8] === 1;
+        const endTimeOffset = 8 + 8 + 8; // disc + roundNum + startTime
+        const roundEndTime = Number(roundAccount.data.readBigInt64LE(endTimeOffset));
+        const now = Math.floor(Date.now() / 1000);
+        
+        if (!roundFinalized && roundEndTime > 0 && now >= roundEndTime) {
+          // Round ended — BATCH: finalize + init next round + crank autominer
+          setAutoCrankStatus(`Batching finalize + init + bet...`);
+          
+          // 1) Finalize current round
+          batchInstructions.push(new TransactionInstruction({
+            keys: [
+              { pubkey: publicKey, isSigner: true, isWritable: true },
+              { pubkey: configPDA, isSigner: false, isWritable: true },
+              { pubkey: roundPDA, isSigner: false, isWritable: true },
+              { pubkey: WARCHEST_WALLET, isSigner: false, isWritable: true },
+              { pubkey: ADMIN_WALLET, isSigner: false, isWritable: true },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            ],
+            programId: PROGRAM_ID,
+            data: DISCRIMINATORS.finalizeRound,
+          }));
+          
+          // 2) Init next round (currentRound + 1 after finalize increments it)
+          const nextRound = BigInt(currentRound + 1);
+          const [nextRoundPDA] = getRoundPDA(nextRound);
+          batchInstructions.push(new TransactionInstruction({
+            keys: [
+              { pubkey: publicKey, isSigner: true, isWritable: true },
+              { pubkey: configPDA, isSigner: false, isWritable: true },
+              { pubkey: nextRoundPDA, isSigner: false, isWritable: true },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            ],
+            programId: PROGRAM_ID,
+            data: DISCRIMINATORS.initializeRound,
+          }));
+          
+          // 3) Crank own autominer for the NEW round
+          const [autominerPDA] = getAutominerPDA(publicKey);
+          const autominerAccount = await connection.getAccountInfo(autominerPDA);
+          if (autominerAccount) {
+            const amEnabled = autominerAccount.data[8 + 32] === 1;
+            const amBalance = Number(autominerAccount.data.readBigUInt64LE(8 + 32 + 1 + 1 + 1));
+            const amSpb = Number(autominerAccount.data.readBigUInt64LE(8 + 32 + 1 + 1 + 1 + 8));
+            if (amEnabled && amBalance >= amSpb * 5 + 10000) {
+              const [minerPDA] = getMinerPDA(publicKey);
+              const [betPDA] = getBetPDA(publicKey, nextRound);
+              batchInstructions.push(new TransactionInstruction({
+                keys: [
+                  { pubkey: publicKey, isSigner: true, isWritable: true },
+                  { pubkey: publicKey, isSigner: false, isWritable: false },
+                  { pubkey: minerPDA, isSigner: false, isWritable: false },
+                  { pubkey: autominerPDA, isSigner: false, isWritable: true },
+                  { pubkey: configPDA, isSigner: false, isWritable: false },
+                  { pubkey: nextRoundPDA, isSigner: false, isWritable: true },
+                  { pubkey: betPDA, isSigner: false, isWritable: true },
+                  { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                ],
+                programId: PROGRAM_ID,
+                data: DISCRIMINATORS.crankAutominer,
+              }));
+              description = `Finalize R${currentRound} + Init R${Number(nextRound)} + Bet`;
+            } else {
+              description = `Finalize R${currentRound} + Init R${Number(nextRound)}`;
+            }
+          } else {
+            description = `Finalize R${currentRound} + Init R${Number(nextRound)}`;
+          }
+          
+          // Send the batched TX — ONE wallet popup
+          try {
+            const tx = new Transaction().add(...batchInstructions);
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+            tx.recentBlockhash = blockhash;
+            tx.feePayer = publicKey;
+            const sig = await sendTransaction(tx, connection, { skipPreflight: true });
+            await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+            lastCrankedRoundRef.current = Number(nextRound);
+            setAutoCrankStatus(`✓ ${description}`);
+          } catch (e: any) {
+            setAutoCrankStatus(`Batch failed: ${e.message?.slice(0, 40) || 'error'}`);
+          }
+          return;
+        }
+        
+        // Round is active and not ended
+        if (roundFinalized) {
+          setAutoCrankStatus(`Round ${currentRound} finalized, waiting for next...`);
+          return;
+        }
+        
+        // Check if we already cranked this round
+        if (currentRound === lastCrankedRoundRef.current) {
+          const timeRemaining = roundEndTime > 0 ? Math.max(0, roundEndTime - now) : '?';
+          setAutoCrankStatus(`✓ Bet placed for round ${currentRound} (${timeRemaining}s left)`);
+          return;
+        }
+        
+        // Round is active, haven't bet yet — crank own autominer
         const [autominerPDA] = getAutominerPDA(publicKey);
         const autominerAccount = await connection.getAccountInfo(autominerPDA);
         if (!autominerAccount) {
@@ -1613,18 +1985,17 @@ export function useProgram() {
           return;
         }
         
-        // Parse autominer
-        const data = autominerAccount.data;
-        const enabled = data[8 + 32] === 1;
-        const balance = Number(data.readBigUInt64LE(8 + 32 + 1 + 1 + 1));
-        const solPerBlock = Number(data.readBigUInt64LE(8 + 32 + 1 + 1 + 1 + 8));
+        const amData = autominerAccount.data;
+        const enabled = amData[8 + 32] === 1;
+        const balance = Number(amData.readBigUInt64LE(8 + 32 + 1 + 1 + 1));
+        const amSolPerBlock = Number(amData.readBigUInt64LE(8 + 32 + 1 + 1 + 1 + 8));
         
         if (!enabled) {
           setAutoCrankStatus('AutoMiner disabled');
           return;
         }
         
-        const requiredBalance = solPerBlock * 5 + 10000; // 5 blocks + crank incentive
+        const requiredBalance = amSolPerBlock * 5 + 10000;
         if (balance < requiredBalance) {
           setAutoCrankStatus('Insufficient AutoMiner balance');
           return;
@@ -1639,7 +2010,7 @@ export function useProgram() {
           return;
         }
         
-        // Place the crank
+        // Place the crank — single TX
         setAutoCrankStatus(`Placing bet for round ${currentRound}...`);
         const success = await crankAutominer(undefined, true);
         
@@ -1660,7 +2031,7 @@ export function useProgram() {
     
     // Then run every 5 seconds
     autoCrankIntervalRef.current = setInterval(runCrank, 5000);
-  }, [publicKey, connection, crankAutominer]);
+  }, [publicKey, connection, crankAutominer, sendTransaction]);
 
   // Stop auto-crank
   const stopAutoCrank = useCallback(() => {
@@ -1681,6 +2052,136 @@ export function useProgram() {
       fetchAutominer();
     }
   }, [publicKey, fetchBalances, fetchConfig, fetchMiner, fetchAutominer]);
+
+  // === ADMIN FUNCTIONS ===
+  
+  // Pause protocol
+  const pauseProtocol = useCallback(async () => {
+    if (!publicKey) return;
+    setIsLoading(true);
+    try {
+      const [configPDA] = getConfigPDA();
+      const instruction = new TransactionInstruction({
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: configPDA, isSigner: false, isWritable: true },
+        ],
+        programId: PROGRAM_ID,
+        data: DISCRIMINATORS.pause,
+      });
+      await sendTx(instruction);
+      toast.success('Protocol paused');
+      await fetchConfig();
+    } catch (error: any) {
+      toast.error(error.message || 'Pause failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publicKey, sendTx, fetchConfig, setIsLoading]);
+
+  // Unpause protocol
+  const unpauseProtocol = useCallback(async () => {
+    if (!publicKey) return;
+    setIsLoading(true);
+    try {
+      const [configPDA] = getConfigPDA();
+      const instruction = new TransactionInstruction({
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: configPDA, isSigner: false, isWritable: true },
+        ],
+        programId: PROGRAM_ID,
+        data: DISCRIMINATORS.unpause,
+      });
+      await sendTx(instruction);
+      toast.success('Protocol unpaused');
+      await fetchConfig();
+    } catch (error: any) {
+      toast.error(error.message || 'Unpause failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publicKey, sendTx, fetchConfig, setIsLoading]);
+
+  // Update staking APR (admin only)
+  const updateStakingApr = useCallback(async (newApr: number) => {
+    if (!publicKey) return;
+    setIsLoading(true);
+    try {
+      const [configPDA] = getConfigPDA();
+      const data = Buffer.alloc(2);
+      data.writeUInt16LE(newApr, 0);
+      const instruction = new TransactionInstruction({
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: configPDA, isSigner: false, isWritable: true },
+        ],
+        programId: PROGRAM_ID,
+        data: Buffer.concat([DISCRIMINATORS.updateStakingApr, data]),
+      });
+      await sendTx(instruction);
+      toast.success(`Staking APR updated to ${newApr / 100}%`);
+      await fetchConfig();
+    } catch (error: any) {
+      toast.error(error.message || 'Update APR failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publicKey, sendTx, fetchConfig, setIsLoading]);
+
+  // Withdraw motherlode fees (admin only)
+  const withdrawMotherlodeFees = useCallback(async (amount: number) => {
+    if (!publicKey) return;
+    setIsLoading(true);
+    try {
+      const [configPDA] = getConfigPDA();
+      const data = Buffer.alloc(8);
+      data.writeBigUInt64LE(BigInt(Math.floor(amount * LAMPORTS_PER_SOL)));
+      const instruction = new TransactionInstruction({
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: configPDA, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        programId: PROGRAM_ID,
+        data: Buffer.concat([DISCRIMINATORS.withdrawMotherlodeFees, data]),
+      });
+      await sendTx(instruction);
+      toast.success(`Withdrew ${amount} SOL from motherlode`);
+      await fetchConfig();
+    } catch (error: any) {
+      toast.error(error.message || 'Withdraw failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publicKey, sendTx, fetchConfig, setIsLoading]);
+
+  // Withdraw autominer treasury (admin only)
+  const withdrawAutominerTreasury = useCallback(async (amount: number) => {
+    if (!publicKey) return;
+    setIsLoading(true);
+    try {
+      const [configPDA] = getConfigPDA();
+      const data = Buffer.alloc(8);
+      data.writeBigUInt64LE(BigInt(Math.floor(amount * LAMPORTS_PER_SOL)));
+      const instruction = new TransactionInstruction({
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: configPDA, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        programId: PROGRAM_ID,
+        data: Buffer.concat([DISCRIMINATORS.withdrawAutominerTreasury, data]),
+      });
+      await sendTx(instruction);
+      toast.success(`Withdrew ${amount} SOL from autominer treasury`);
+      await fetchConfig();
+    } catch (error: any) {
+      toast.error(error.message || 'Withdraw failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publicKey, sendTx, fetchConfig, setIsLoading]);
 
   return {
     fetchBalances,
@@ -1711,11 +2212,18 @@ export function useProgram() {
     withdrawAutominer,
     disableAutominer,
     triggerMotherlode,
+    claimAllRewards_auto,
     // Auto-crank exports
     crankAutominer,
     startAutoCrank,
     stopAutoCrank,
     autoCrankEnabled,
     autoCrankStatus,
+    // Admin exports
+    pauseProtocol,
+    unpauseProtocol,
+    updateStakingApr,
+    withdrawMotherlodeFees,
+    withdrawAutominerTreasury,
   };
 }

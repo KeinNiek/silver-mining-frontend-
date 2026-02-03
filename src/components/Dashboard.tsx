@@ -39,11 +39,12 @@ export default function Dashboard() {
     fetchPool,
     claimSol,
     claimBetSilver,
-    crankAutominer,
-    startAutoCrank,
-    stopAutoCrank,
-    autoCrankEnabled,
-    autoCrankStatus,
+    claimAllRewards_auto,
+    triggerMotherlode,
+    claimRedistribution,
+    // Admin
+    pauseProtocol,
+    unpauseProtocol,
   } = useProgram();
 
   const [activeTab, setActiveTab] = useState('mine');
@@ -72,35 +73,49 @@ export default function Dashboard() {
   const [showLargeBetConfirm, setShowLargeBetConfirm] = useState(false);
   const [autoMineLevel, setAutoMineLevel] = useState(0);
   const [autoSolPerBlock, setAutoSolPerBlock] = useState('0.1');
-  const [autoReload, setAutoReload] = useState(false);
+  const [autoReload, setAutoReload] = useState(false); // auto-reload disabled (server bot can't claim)
   const [autoDepositAmount, setAutoDepositAmount] = useState('');
   const [autoWithdrawAmount, setAutoWithdrawAmount] = useState('');
   
   // Round timer state
   const [timeLeft, setTimeLeft] = useState(ROUND_DURATION);
 
+  // Sync AutoMiner UI form fields from on-chain data (survives page refresh)
+  useEffect(() => {
+    if (autominer) {
+      setAutoMineLevel(autominer.mineLevel);
+      setAutoSolPerBlock((autominer.solPerBlock / 1e9).toString());
+      setAutoReload(autominer.autoReload);
+    }
+  }, [autominer?.mineLevel, autominer?.solPerBlock, autominer?.autoReload]);
+
   // Calculate bet details
   const blocksCount = selectedBlocks.filter(b => b).length;
   const totalBet = blocksCount * parseFloat(solPerBlock || '0');
   const winChance = (blocksCount / 5) * 100;
 
-  // Round timer effect
+  // Round timer effect - use round.endTime if available
   useEffect(() => {
-    if (!config?.roundStartTime) return;
-    
     const updateTimer = () => {
       const now = Math.floor(Date.now() / 1000);
-      const elapsed = now - config.roundStartTime;
-      const remaining = Math.max(0, ROUND_DURATION - elapsed);
-      setTimeLeft(remaining);
+      if (round?.endTime && round.endTime > 0) {
+        // Use actual end time from round data
+        const remaining = Math.max(0, round.endTime - now);
+        setTimeLeft(remaining);
+      } else if (config?.roundStartTime) {
+        // Fallback to calculated end time
+        const elapsed = now - config.roundStartTime;
+        const remaining = Math.max(0, ROUND_DURATION - elapsed);
+        setTimeLeft(remaining);
+      }
     };
     
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [config?.roundStartTime]);
+  }, [config?.roundStartTime, round?.endTime]);
 
-  // Refresh all data periodically (every 3s for responsive UI)
+  // Refresh all data periodically (every 12s — balanced for UX vs RPC)
   useEffect(() => {
     if (!wallet.publicKey) return;
     
@@ -114,14 +129,14 @@ export default function Dashboard() {
           await fetchRound(config.currentRound);
         }
       } catch (e) {
-        console.error('Refresh error:', e);
+        // Silent refresh failure
       }
     };
     
     // Initial fetch
     refreshAll();
     
-    const interval = setInterval(refreshAll, 3000);
+    const interval = setInterval(refreshAll, 12000);
     return () => clearInterval(interval);
   }, [wallet.publicKey]);
 
@@ -181,9 +196,9 @@ export default function Dashboard() {
   // Load pools when config changes or switching to pool tab
   useEffect(() => {
     const loadPools = async () => {
-      console.log('Loading pools, totalPools:', config?.totalPools);
+
       if (!config?.totalPools || config.totalPools === 0) {
-        console.log('No pools to load');
+
         setAvailablePools([]);
         return;
       }
@@ -191,16 +206,16 @@ export default function Dashboard() {
       try {
         const pools: any[] = [];
         const total = Math.min(Number(config.totalPools), 20);
-        console.log('Fetching', total, 'pools...');
+
         for (let i = 0; i < total; i++) {
           const poolData = await fetchPool(i);
-          console.log('Pool', i, ':', poolData);
+
           if (poolData && poolData.active) {
             pools.push({ id: i, ...poolData });
           }
         }
         setAvailablePools(pools);
-        console.log('Loaded pools:', pools.length, pools);
+
       } catch (error) {
         console.error('Failed to load pools:', error);
       } finally {
@@ -279,16 +294,25 @@ export default function Dashboard() {
 
   // Handle create pool
   const handleCreatePool = async () => {
-    const feeBps = Math.floor(parseFloat(poolFee) * 100);
-    await createPool(feeBps, poolMineLevel);
-    // Wait a bit for blockchain state to update
-    await new Promise(r => setTimeout(r, 1000));
-    // Refresh config to get updated totalPools
-    await fetchConfig();
-    await fetchMiner();
-    // Wait and reload pools
-    await new Promise(r => setTimeout(r, 500));
-    await loadAllPools();
+    try {
+      const feeBps = Math.floor(parseFloat(poolFee) * 100);
+      if (feeBps > 500) {
+        alert('Pool fee must be 5% or less');
+        return;
+      }
+      await createPool(feeBps, poolMineLevel);
+      // Wait a bit for blockchain state to update
+      await new Promise(r => setTimeout(r, 1000));
+      // Refresh config to get updated totalPools
+      await fetchConfig();
+      await fetchMiner();
+      // Wait and reload pools
+      await new Promise(r => setTimeout(r, 500));
+      await loadAllPools();
+    } catch (e: any) {
+      // createPool handles its own errors, this is a safety net
+      console.error('handleCreatePool error:', e);
+    }
   };
 
   // Load all pools for browser
@@ -373,22 +397,34 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="py-8">
+    <div className="py-4 sm:py-8 px-0">
+      {/* Paused Banner */}
+      {config?.paused && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-4 sm:mb-6 p-3 sm:p-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center gap-3"
+        >
+          <AlertIcon className="w-5 h-5 text-red-400 flex-shrink-0" />
+          <p className="text-red-400 font-semibold text-sm sm:text-base">Protocol is paused by admin. Mining and betting are temporarily disabled.</p>
+        </motion.div>
+      )}
+
       {/* Initialize Miner Banner */}
       {!miner && (
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-6 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between"
+          className="mb-4 sm:mb-6 p-3 sm:p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
         >
           <div className="flex items-center gap-3">
-            <AlertIcon className="w-5 h-5 text-amber-400" />
-            <p className="text-amber-400">Initialize your miner account to start playing!</p>
+            <AlertIcon className="w-5 h-5 text-amber-400 flex-shrink-0" />
+            <p className="text-amber-400 text-sm sm:text-base">Initialize your miner account to start playing!</p>
           </div>
           <button 
             onClick={initializeMiner} 
             disabled={isLoading}
-            className="btn-primary py-2 px-4"
+            className="btn-primary py-2 px-4 w-full sm:w-auto text-sm"
           >
             {isLoading ? 'Initializing...' : 'Initialize Miner'}
           </button>
@@ -399,47 +435,47 @@ export default function Dashboard() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8"
+        className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 sm:mb-8"
       >
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-silver-500 text-sm mb-2">
-            <ClockIcon className="w-4 h-4 text-copper-500" />
+        <div className="card p-3 sm:p-5">
+          <div className="flex items-center gap-2 text-silver-500 text-xs sm:text-sm mb-1 sm:mb-2">
+            <ClockIcon className="w-3 h-3 sm:w-4 sm:h-4 text-copper-500" />
             <span>Current Round</span>
           </div>
-          <p className="text-3xl font-bold text-white">{config?.currentRound || 0}</p>
+          <p className="text-xl sm:text-3xl font-bold text-white">{config?.currentRound || 0}</p>
         </div>
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-silver-500 text-sm mb-2">
-            <WalletIcon className="w-4 h-4 text-emerald-500" />
+        <div className="card p-3 sm:p-5">
+          <div className="flex items-center gap-2 text-silver-500 text-xs sm:text-sm mb-1 sm:mb-2">
+            <WalletIcon className="w-3 h-3 sm:w-4 sm:h-4 text-emerald-500" />
             <span>Round Pot</span>
           </div>
-          <p className="text-3xl font-bold text-emerald-400">{formatSOL(round?.totalPot || 0)} SOL</p>
+          <p className="text-xl sm:text-3xl font-bold text-emerald-400 truncate">{formatSOL(round?.totalPot || 0)} SOL</p>
         </div>
         <div className="stat-card-copper">
-          <div className="flex items-center gap-2 text-white/70 text-sm mb-2">
-            <TrophyIcon className="w-4 h-4" />
+          <div className="flex items-center gap-2 text-white/70 text-xs sm:text-sm mb-1 sm:mb-2">
+            <TrophyIcon className="w-3 h-3 sm:w-4 sm:h-4" />
             <span>Motherlode</span>
           </div>
-          <p className="text-3xl font-bold text-white">{config ? formatSOL(config.motherlodeBalance) : '0'}</p>
+          <p className="text-xl sm:text-3xl font-bold text-white truncate">{config ? formatSOL(config.motherlodeBalance) : '0'}</p>
         </div>
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-silver-500 text-sm mb-2">
-            <ChartIcon className="w-4 h-4 text-copper-500" />
+        <div className="card p-3 sm:p-5">
+          <div className="flex items-center gap-2 text-silver-500 text-xs sm:text-sm mb-1 sm:mb-2">
+            <ChartIcon className="w-3 h-3 sm:w-4 sm:h-4 text-copper-500" />
             <span>Total SOL Won</span>
           </div>
-          <p className="text-3xl font-bold text-emerald-400">{formatSOL(miner?.totalSolWon || 0)}</p>
+          <p className="text-xl sm:text-3xl font-bold text-emerald-400 truncate">{formatSOL(miner?.totalSolWon || 0)}</p>
         </div>
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-silver-500 text-sm mb-2">
-            <PickaxeIcon className="w-4 h-4 text-copper-500" />
+        <div className="card p-3 sm:p-5">
+          <div className="flex items-center gap-2 text-silver-500 text-xs sm:text-sm mb-1 sm:mb-2">
+            <PickaxeIcon className="w-3 h-3 sm:w-4 sm:h-4 text-copper-500" />
             <span>Current Mine</span>
           </div>
-          <p className="text-3xl font-bold text-white">{MINE_NAMES[miner?.currentMine || 0]?.split(' ')[0] || 'Copper'}</p>
+          <p className="text-xl sm:text-3xl font-bold text-white">{MINE_NAMES[miner?.currentMine || 0]?.split(' ')[0] || 'Copper'}</p>
         </div>
       </motion.div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-8 p-1.5 bg-silver-900/50 rounded-xl border border-silver-800/50 w-fit">
+      <div className="flex gap-1 mb-6 sm:mb-8 p-1.5 bg-silver-900/50 rounded-xl border border-silver-800/50 overflow-x-auto no-scrollbar">
         {[
           { id: 'mine', label: 'Mine', icon: PickaxeIcon },
           { id: 'pool', label: 'Pool', icon: UsersIcon },
@@ -450,20 +486,20 @@ export default function Dashboard() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap flex-shrink-0 ${
               activeTab === tab.id
                 ? 'bg-copper-500 text-white shadow-lg'
                 : 'text-silver-400 hover:text-white hover:bg-silver-800/50'
             }`}
           >
-            <tab.icon className="w-4 h-4" />
-            <span className="hidden sm:inline">{tab.label}</span>
+            <tab.icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span>{tab.label}</span>
           </button>
         ))}
       </div>
 
       {/* Content */}
-      <div className="grid lg:grid-cols-3 gap-6">
+      <div className="grid lg:grid-cols-3 gap-4 sm:gap-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -471,36 +507,36 @@ export default function Dashboard() {
           className="lg:col-span-2"
         >
           {activeTab === 'mine' && (
-            <div className="card p-6 sm:p-8">
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
-                    <PickaxeIcon className="w-5 h-5 text-copper-500" />
+            <div className="card p-4 sm:p-6 md:p-8">
+              <div className="flex items-center justify-between mb-6 sm:mb-8">
+                <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2 sm:gap-3">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
+                    <PickaxeIcon className="w-4 h-4 sm:w-5 sm:h-5 text-copper-500" />
                   </div>
                   Place Your Bet
                 </h2>
-                <span className="badge-copper">
+                <span className="badge-copper text-xs">
                   {EMISSIONS[miner?.currentMine || 0]} SILVER/win
                 </span>
               </div>
 
               {/* Blocks */}
-              <div className="mb-8">
+              <div className="mb-6 sm:mb-8">
                 <label className="label mb-3">Select Blocks ({blocksCount}/5)</label>
-                <div className="grid grid-cols-5 gap-3">
+                <div className="grid grid-cols-5 gap-1.5 sm:gap-3">
                   {[0, 1, 2, 3, 4].map((i) => (
                     <button
                       key={i}
                       onClick={() => handleBlockToggle(i)}
-                      className={`p-4 sm:p-5 rounded-xl border-2 transition-all ${
+                      className={`p-2 sm:p-4 md:p-5 rounded-lg sm:rounded-xl border-2 transition-all ${
                         selectedBlocks[i]
                           ? 'bg-[#aea0c5]/20 border-[#aea0c5] shadow-[0_0_20px_rgba(174,160,197,0.3)]'
                           : 'bg-silver-900/30 border-silver-700/50 hover:border-silver-600'
                       }`}
                     >
-                      <BlockIcon className={`w-6 sm:w-8 h-6 sm:h-8 mx-auto mb-2 ${selectedBlocks[i] ? 'text-[#aea0c5]' : 'text-silver-600'}`} />
-                      <p className={`text-xs sm:text-sm font-semibold ${selectedBlocks[i] ? 'text-[#aea0c5]' : 'text-silver-500'}`}>
-                        Block {i + 1}
+                      <BlockIcon className={`w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 mx-auto mb-1 sm:mb-2 ${selectedBlocks[i] ? 'text-[#aea0c5]' : 'text-silver-600'}`} />
+                      <p className={`text-xs font-semibold ${selectedBlocks[i] ? 'text-[#aea0c5]' : 'text-silver-500'}`}>
+                        {i + 1}
                       </p>
                     </button>
                   ))}
@@ -516,7 +552,7 @@ export default function Dashboard() {
               </div>
 
               {/* SOL Input */}
-              <div className="mb-8">
+              <div className="mb-6 sm:mb-8">
                 <label className="label mb-3">SOL Per Block</label>
                 <div className="relative">
                   <input
@@ -530,12 +566,12 @@ export default function Dashboard() {
                   />
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-silver-500 font-medium">SOL</span>
                 </div>
-                <div className="flex gap-2 mt-3">
+                <div className="flex gap-1.5 sm:gap-2 mt-3">
                   {['0.1', '0.5', '1', '5'].map((val) => (
                     <button
                       key={val}
                       onClick={() => setSolPerBlock(val)}
-                      className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
+                      className={`flex-1 px-2 sm:px-4 py-2 text-xs sm:text-sm rounded-lg border transition-colors ${
                         solPerBlock === val 
                           ? 'bg-copper-500/20 border-copper-500/50 text-copper-400' 
                           : 'bg-silver-800/30 border-silver-700/50 text-silver-400 hover:border-copper-500/30'
@@ -620,19 +656,19 @@ export default function Dashboard() {
           )}
 
           {activeTab === 'stake' && (
-            <div className="card p-6 sm:p-8">
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
-                    <GemIcon className="w-5 h-5 text-copper-500" />
+            <div className="card p-4 sm:p-6 md:p-8">
+              <div className="flex items-center justify-between mb-6 sm:mb-8">
+                <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2 sm:gap-3">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
+                    <GemIcon className="w-4 h-4 sm:w-5 sm:h-5 text-copper-500" />
                   </div>
                   Stake SILVER
                 </h2>
-                <span className="badge-success">{config?.stakingApr ? config.stakingApr / 100 : STAKING_APR}% APR</span>
+                <span className="badge-success text-xs">{config?.stakingApr ? config.stakingApr / 100 : STAKING_APR}% APR</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 mb-8">
-                <div className="card p-5">
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-6 sm:mb-8">
+                <div className="card p-3 sm:p-5">
                   <p className="text-sm text-silver-500 mb-2">Staked Balance</p>
                   <p className="text-3xl font-bold text-white">{formatAmount(miner?.stakedAmount || 0)}</p>
                 </div>
@@ -706,17 +742,17 @@ export default function Dashboard() {
           )}
 
           {activeTab === 'refine' && (
-            <div className="card p-6 sm:p-8">
-              <div className="flex items-center gap-3 mb-8">
-                <div className="w-10 h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
-                  <FlameIcon className="w-5 h-5 text-copper-500" />
+            <div className="card p-4 sm:p-6 md:p-8">
+              <div className="flex items-center gap-2 sm:gap-3 mb-6 sm:mb-8">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
+                  <FlameIcon className="w-4 h-4 sm:w-5 sm:h-5 text-copper-500" />
                 </div>
-                <h2 className="text-xl font-bold text-white">Refine UNREFINED</h2>
+                <h2 className="text-lg sm:text-xl font-bold text-white">Refine UNREFINED</h2>
               </div>
 
-              <div className="stat-card-copper p-6 mb-6">
-                <p className="text-sm text-white/70 mb-2">Your UNREFINED Balance</p>
-                <p className="text-4xl font-bold text-white">{formatAmount(balances.unrefined)}</p>
+              <div className="stat-card-copper p-4 sm:p-6 mb-4 sm:mb-6">
+                <p className="text-xs sm:text-sm text-white/70 mb-1 sm:mb-2">Your UNREFINED Balance</p>
+                <p className="text-2xl sm:text-4xl font-bold text-white truncate">{formatAmount(balances.unrefined)}</p>
               </div>
 
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 mb-6 flex items-start gap-3">
@@ -749,19 +785,47 @@ export default function Dashboard() {
               >
                 {isLoading ? 'Processing...' : 'Refine All UNREFINED'}
               </button>
+
+              {/* Redistribution Pool */}
+              <div className="mt-6 border-t border-silver-800/50 pt-6">
+                <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                  <GemIcon className="w-5 h-5 text-copper-400" />
+                  Redistribution Pool
+                </h3>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="p-3 bg-silver-900/50 rounded-lg">
+                    <p className="text-silver-500 text-xs">Pool Balance</p>
+                    <p className="text-copper-400 font-semibold">{formatAmount(config?.redistributionPool || 0)} SILVER</p>
+                  </div>
+                  <div className="p-3 bg-silver-900/50 rounded-lg">
+                    <p className="text-silver-500 text-xs">Your UNREFINED Holdings</p>
+                    <p className="text-white font-semibold">{formatAmount(balances.unrefined)}</p>
+                  </div>
+                </div>
+                <p className="text-silver-500 text-sm mb-3">
+                  Claim your share of the redistribution pool based on your UNREFINED token holdings.
+                </p>
+                <button
+                  onClick={claimRedistribution}
+                  className="btn-secondary w-full"
+                  disabled={isLoading || (config?.redistributionPool || 0) <= 0}
+                >
+                  {isLoading ? 'Claiming...' : 'Claim Redistribution Rewards'}
+                </button>
+              </div>
             </div>
           )}
 
           {activeTab === 'pool' && (
-            <div className="card p-6 sm:p-8">
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
-                    <UsersIcon className="w-5 h-5 text-copper-500" />
+            <div className="card p-4 sm:p-6 md:p-8">
+              <div className="flex items-center justify-between mb-6 sm:mb-8">
+                <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2 sm:gap-3">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
+                    <UsersIcon className="w-4 h-4 sm:w-5 sm:h-5 text-copper-500" />
                   </div>
                   Mining Pools
                 </h2>
-                <span className="badge-copper">Max {MAX_POOL_MEMBERS} members</span>
+                <span className="badge-copper text-xs">Max {MAX_POOL_MEMBERS}</span>
               </div>
 
               {miner?.isInPool && pool ? (
@@ -835,16 +899,16 @@ export default function Dashboard() {
                     {availablePools.length > 0 ? (
                       <div className="space-y-3 max-h-64 overflow-y-auto">
                         {availablePools.map((p) => (
-                          <div key={p.id} className="p-3 bg-silver-800/50 rounded-lg flex items-center justify-between">
-                            <div>
-                              <p className="text-white font-semibold">Pool #{p.id}</p>
-                              <p className="text-silver-400 text-xs">
-                                {MINE_NAMES[p.mineLevel]} • {(p.feeBps / 100).toFixed(1)}% fee • {p.memberCount}/{MAX_POOL_MEMBERS} members
+                          <div key={p.id} className="p-3 bg-silver-800/50 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-white font-semibold text-sm">Pool #{p.id}</p>
+                              <p className="text-silver-400 text-xs truncate">
+                                {MINE_NAMES[p.mineLevel]} • {(p.feeBps / 100).toFixed(1)}% fee • {p.memberCount}/{MAX_POOL_MEMBERS}
                               </p>
                             </div>
                             <button
                               onClick={() => joinPool(p.id)}
-                              className="btn-primary px-4 py-1 text-sm"
+                              className="btn-primary px-4 py-1 text-xs w-full sm:w-auto flex-shrink-0"
                               disabled={isLoading || p.memberCount >= MAX_POOL_MEMBERS}
                             >
                               {p.memberCount >= MAX_POOL_MEMBERS ? 'Full' : 'Join'}
@@ -905,15 +969,15 @@ export default function Dashboard() {
                           value={poolFee}
                           onChange={(e) => setPoolFee(e.target.value)}
                           min="0"
-                          max="10"
+                          max="5"
                           step="0.1"
                         />
-                        <p className="text-silver-500 text-xs mt-1">Max 10% fee. This is taken from pool winnings.</p>
+                        <p className="text-silver-500 text-xs mt-1">Max 5% fee. This is taken from pool winnings.</p>
                       </div>
                       
                       <div>
                         <label className="label mb-2">Mine Level</label>
-                        <div className="grid grid-cols-5 gap-2">
+                        <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 sm:gap-2">
                           {MINE_NAMES.map((name, i) => {
                             const unlocked = i <= (miner?.currentMine || 0);
                             return (
@@ -953,33 +1017,79 @@ export default function Dashboard() {
           )}
 
           {activeTab === 'auto' && (
-            <div className="card p-6 sm:p-8">
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
-                    <BoltIcon className="w-5 h-5 text-copper-500" />
+            <div className="card p-4 sm:p-6 md:p-8">
+              <div className="flex items-center justify-between mb-6 sm:mb-8">
+                <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2 sm:gap-3">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-copper-500/10 border border-copper-500/30 flex items-center justify-center">
+                    <BoltIcon className="w-4 h-4 sm:w-5 sm:h-5 text-copper-500" />
                   </div>
                   AutoMiner
                 </h2>
-                <span className="badge-copper">Hands-free Mining</span>
+                {autominer?.enabled ? (
+                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                    <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                    Mining
+                  </span>
+                ) : (
+                  <span className="badge-copper text-xs">Hands-free</span>
+                )}
               </div>
 
-              <div className="bg-copper-500/10 border border-copper-500/30 rounded-xl p-4 mb-6">
-                <p className="text-copper-300 text-sm">
-                  AutoMiner automatically places bets for you every round using ALL 5 blocks (100% win rate). 
-                  Deposit SOL, configure your strategy, and let it mine 24/7.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 mb-8">
-                <div className="card p-5">
-                  <p className="text-sm text-silver-500 mb-2">AutoMiner Balance</p>
-                  <p className="text-3xl font-bold text-white">{formatSOL(autominer?.balance || 0)} SOL</p>
+              {/* Active mining banner */}
+              {autominer?.enabled && autominer.balance > 0 && (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
+                      <BoltIcon className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <p className="text-emerald-300 font-semibold">AutoMiner is running</p>
+                      <p className="text-emerald-400/70 text-sm">Bets are placed automatically every round — no action needed.</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="card p-5">
-                  <p className="text-sm text-silver-500 mb-2">Status</p>
-                  <p className={`text-xl font-bold ${autominer?.enabled ? 'text-emerald-400' : 'text-silver-500'}`}>
-                    {autominer ? (autominer.enabled ? 'Active' : 'Disabled') : 'Not Setup'}
+              )}
+
+              {/* Low balance warning */}
+              {autominer?.enabled && autominer.balance > 0 && autominer.balance < (autominer.solPerBlock || 0) * 5 && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-4">
+                  <p className="text-amber-400 text-sm flex items-center gap-2">
+                    <AlertIcon className="w-4 h-4 flex-shrink-0" />
+                    Low balance — deposit more SOL to keep mining. Need at least {formatSOL((autominer.solPerBlock || 0) * 5)} SOL per round.
+                  </p>
+                </div>
+              )}
+
+              {/* Empty balance warning */}
+              {autominer?.enabled && autominer.balance === 0 && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-4">
+                  <p className="text-red-400 text-sm flex items-center gap-2">
+                    <AlertIcon className="w-4 h-4 flex-shrink-0" />
+                    AutoMiner balance is empty — deposit SOL to resume mining.
+                  </p>
+                </div>
+              )}
+
+              {/* Info for users without autominer yet */}
+              {!autominer && (
+                <div className="bg-copper-500/10 border border-copper-500/30 rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
+                  <p className="text-copper-300 text-xs sm:text-sm">
+                    AutoMiner places bets for you every round using ALL 5 blocks (100% win rate). 
+                    Set it up, deposit SOL, and it mines 24/7 automatically.
+                  </p>
+                </div>
+              )}
+
+              {/* Stats */}
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-6 sm:mb-8">
+                <div className="card p-3 sm:p-5">
+                  <p className="text-xs sm:text-sm text-silver-500 mb-1 sm:mb-2">Balance</p>
+                  <p className="text-lg sm:text-3xl font-bold text-white truncate">{formatSOL(autominer?.balance || 0)} SOL</p>
+                </div>
+                <div className="card p-3 sm:p-5">
+                  <p className="text-xs sm:text-sm text-silver-500 mb-1 sm:mb-2">Status</p>
+                  <p className={`text-lg sm:text-xl font-bold ${autominer?.enabled ? 'text-emerald-400' : 'text-silver-500'}`}>
+                    {autominer ? (autominer.enabled ? (autominer.balance > 0 ? 'Mining' : 'No Balance') : 'Disabled') : 'Not Setup'}
                   </p>
                 </div>
               </div>
@@ -997,10 +1107,11 @@ export default function Dashboard() {
                 </div>
               )}
 
+              {/* Settings */}
               <div className="space-y-4 mb-6">
                 <div>
                   <label className="label mb-2">Select Mine</label>
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 sm:gap-2">
                     {MINE_NAMES.map((name, i) => {
                       const unlocked = i <= (miner?.currentMine || 0);
                       return (
@@ -1035,22 +1146,11 @@ export default function Dashboard() {
                     value={autoSolPerBlock}
                     onChange={(e) => setAutoSolPerBlock(e.target.value)}
                   />
-                </div>
-
-                <div className="flex items-center justify-between p-4 bg-silver-900/50 rounded-xl">
-                  <div>
-                    <p className="text-white font-semibold">Auto-Reload</p>
-                    <p className="text-silver-500 text-sm">Automatically re-bet winnings</p>
-                  </div>
-                  <button 
-                    onClick={() => setAutoReload(!autoReload)}
-                    className={`w-12 h-6 rounded-full relative transition-colors ${autoReload ? 'bg-copper-500' : 'bg-silver-700'}`}
-                  >
-                    <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${autoReload ? 'left-7' : 'left-1'}`} />
-                  </button>
+                  <p className="text-silver-500 text-xs mt-1">Cost per round: {autoSolPerBlock ? (parseFloat(autoSolPerBlock) * 5).toFixed(4) : '0'} SOL (5 blocks)</p>
                 </div>
               </div>
 
+              {/* Deposit / Withdraw */}
               <div className="space-y-3 mb-6">
                 <div>
                   <label className="label mb-2">Deposit SOL</label>
@@ -1094,10 +1194,11 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* Action Buttons */}
               {!autominer ? (
                 <button 
                   onClick={handleSetupAutominer}
-                  className="btn-primary w-full"
+                  className="btn-primary w-full py-4"
                   disabled={isLoading}
                 >
                   {isLoading ? 'Setting up...' : 'Setup AutoMiner'}
@@ -1109,95 +1210,82 @@ export default function Dashboard() {
                     className="btn-primary w-full"
                     disabled={isLoading}
                   >
-                    {isLoading ? 'Updating...' : 'Update AutoMiner Settings'}
+                    {isLoading ? 'Updating...' : autominer.enabled ? 'Update Settings' : 'Enable & Start Mining'}
                   </button>
-                  <button 
-                    onClick={handleDisableAutominer}
-                    className="btn-secondary w-full"
-                    disabled={isLoading || !autominer.enabled}
-                  >
-                    {isLoading ? 'Processing...' : 'Disable AutoMiner'}
-                  </button>
-
-                  {/* Auto-Crank Section */}
-                  <div className="border-t border-silver-800/50 pt-6 mt-6">
-                    <h4 className="text-white font-semibold mb-4 flex items-center gap-2">
-                      <BoltIcon className="w-4 h-4 text-copper-400" />
-                      Automatic Mining
-                    </h4>
-                    
-                    {autoCrankEnabled && (
-                      <div className="bg-emerald-500/20 border border-emerald-500/50 rounded-xl p-4 mb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse" />
-                          <div>
-                            <p className="text-emerald-300 font-semibold">Auto-Mining Active</p>
-                            <p className="text-emerald-400/80 text-sm">{autoCrankStatus}</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    <p className="text-silver-400 text-sm mb-4">
-                      Automatically place bets every round without manual intervention.
-                    </p>
-                    
-                    {!autoCrankEnabled ? (
-                      <button 
-                        onClick={startAutoCrank}
-                        className="btn-primary w-full py-4 flex items-center justify-center gap-2"
-                        disabled={!autominer.enabled || (autominer.balance < (autominer.solPerBlock || 0) * 5)}
-                      >
-                        <BoltIcon className="w-5 h-5" />
-                        Start Auto-Mining
-                      </button>
-                    ) : (
-                      <button 
-                        onClick={stopAutoCrank}
-                        className="w-full py-4 border border-red-500/50 text-red-400 hover:bg-red-500/10 rounded-xl transition-colors flex items-center justify-center gap-2"
-                      >
-                        Stop Auto-Mining
-                      </button>
-                    )}
-                    
-                    {autominer.enabled && autominer.balance < (autominer.solPerBlock || 0) * 5 && (
-                      <p className="text-amber-400 text-xs mt-2 text-center flex items-center justify-center gap-1">
-                        <AlertIcon className="w-3 h-3" />
-                        Insufficient balance. Deposit at least {formatSOL((autominer.solPerBlock || 0) * 5)} SOL
-                      </p>
-                    )}
-                    
-                    {!autominer.enabled && (
-                      <p className="text-amber-400 text-xs mt-2 text-center flex items-center justify-center gap-1">
-                        <AlertIcon className="w-3 h-3" />
-                        Enable AutoMiner first by updating settings above
-                      </p>
-                    )}
-
-                    {/* Manual Crank Button */}
+                  {autominer.enabled && (
                     <button 
-                      onClick={() => crankAutominer()}
-                      className="btn-secondary w-full mt-3"
-                      disabled={!autominer.enabled || isLoading}
+                      onClick={handleDisableAutominer}
+                      className="w-full py-3 border border-silver-700/50 text-silver-400 hover:text-white hover:bg-silver-800/50 rounded-xl transition-colors"
+                      disabled={isLoading}
                     >
-                      Manual Crank
+                      {isLoading ? 'Processing...' : 'Pause Mining'}
                     </button>
+                  )}
+
+                  {/* Claim All Rewards */}
+                  <div className="border-t border-silver-800/50 pt-5 mt-5">
+                    <h4 className="text-white font-semibold mb-3 flex items-center gap-2">
+                      <WalletIcon className="w-4 h-4 text-copper-400" />
+                      Claim Rewards
+                    </h4>
+                    <p className="text-silver-400 text-sm mb-4">
+                      Collect your accumulated SOL winnings and UNREFINED tokens from all completed rounds.
+                    </p>
+                    <button 
+                      onClick={claimAllRewards_auto}
+                      className="w-full py-4 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+                      disabled={isLoading}
+                    >
+                      <WalletIcon className="w-5 h-5" />
+                      {isLoading ? 'Claiming...' : 'Claim All Rewards'}
+                    </button>
+                    {autominer.totalWinnings > 0 && (
+                      <p className="text-silver-500 text-xs mt-2 text-center">
+                        Lifetime winnings: {formatSOL(autominer.totalWinnings)} SOL across {autominer.totalBetsPlaced} rounds
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* Motherlode Section - Display only, auto-pays on hit */}
-              {config && config.motherlodeBalance > 0 && (
+              {/* Motherlode Section */}
+              {config && (
                 <div className="mt-6 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between mb-2">
                     <h4 className="text-amber-400 font-semibold flex items-center gap-2">
                       <TrophyIcon className="w-4 h-4" />
                       Motherlode Jackpot
                     </h4>
                     <span className="text-amber-300 font-bold">{formatSOL(config.motherlodeBalance)} SOL</span>
                   </div>
-                  <p className="text-silver-400 text-xs mt-2">
-                    Auto-pays to a lucky winner when the jackpot round hits.
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div className="p-2 bg-silver-900/50 rounded-lg">
+                      <p className="text-silver-500 text-xs">Target Round</p>
+                      <p className="text-amber-400 font-semibold">{config.motherlodeTarget}</p>
+                    </div>
+                    <div className="p-2 bg-silver-900/50 rounded-lg">
+                      <p className="text-silver-500 text-xs">Rounds Until Hit</p>
+                      <p className="text-amber-400 font-semibold">
+                        {config.motherlodeTarget > config.currentRound 
+                          ? config.motherlodeTarget - config.currentRound 
+                          : 'NOW!'}
+                      </p>
+                    </div>
+                  </div>
+                  {config.currentRound >= config.motherlodeTarget && config.motherlodeBalance > 0 && (
+                    <button
+                      onClick={triggerMotherlode}
+                      className="w-full py-3 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-2"
+                      disabled={isLoading}
+                    >
+                      <TrophyIcon className="w-5 h-5" />
+                      {isLoading ? 'Triggering...' : 'Trigger Motherlode!'}
+                    </button>
+                  )}
+                  <p className="text-silver-500 text-xs mt-2">
+                    {config.currentRound >= config.motherlodeTarget 
+                      ? 'The motherlode is ready! Click to claim the jackpot!'
+                      : 'Auto-pays to the triggerer when the target round hits.'}
                   </p>
                 </div>
               )}
@@ -1219,7 +1307,7 @@ export default function Dashboard() {
               <ClockIcon className="w-5 h-5 text-copper-500" />
             </div>
             <div className="text-center mb-4">
-              <p className={`text-5xl font-bold font-mono ${timeLeft <= 5 ? 'text-red-400' : timeLeft <= 10 ? 'text-amber-400' : 'text-white'}`}>
+              <p className={`text-4xl sm:text-5xl font-bold font-mono ${timeLeft <= 5 ? 'text-red-400' : timeLeft <= 10 ? 'text-amber-400' : 'text-white'}`}>
                 {timeLeft}s
               </p>
             </div>
@@ -1398,6 +1486,27 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* Claim All Rewards — works for both manual bets and autominer */}
+          {miner && (
+            <div className="card p-6">
+              <h3 className="font-bold text-white mb-3 flex items-center gap-2">
+                <WalletIcon className="w-5 h-5 text-emerald-400" />
+                Claim Rewards
+              </h3>
+              <p className="text-silver-400 text-sm mb-4">
+                Collect all unclaimed SOL winnings and UNREFINED tokens across all rounds.
+              </p>
+              <button 
+                onClick={claimAllRewards_auto}
+                className="w-full py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+                disabled={isLoading}
+              >
+                <WalletIcon className="w-4 h-4" />
+                {isLoading ? 'Claiming...' : 'Claim All Rewards'}
+              </button>
+            </div>
+          )}
+
           {/* Stats */}
           <div className="card p-6">
             <h3 className="font-bold text-white mb-4">Your Statistics</h3>
@@ -1435,6 +1544,39 @@ export default function Dashboard() {
               })}
             </div>
           </div>
+
+          {/* Admin Panel (only visible to admin) */}
+          {config && wallet.publicKey && config.authority.toBase58() === wallet.publicKey.toBase58() && (
+            <div className="card p-6 border-amber-500/30">
+              <h3 className="font-bold text-amber-400 mb-4 flex items-center gap-2">
+                <AlertIcon className="w-5 h-5" />
+                Admin Panel
+              </h3>
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <button 
+                    onClick={pauseProtocol}
+                    className="flex-1 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 text-red-400 rounded-lg text-sm transition-colors"
+                    disabled={config.paused || isLoading}
+                  >
+                    Pause
+                  </button>
+                  <button 
+                    onClick={unpauseProtocol}
+                    className="flex-1 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 text-emerald-400 rounded-lg text-sm transition-colors"
+                    disabled={!config.paused || isLoading}
+                  >
+                    Unpause
+                  </button>
+                </div>
+                <p className="text-silver-500 text-xs text-center">
+                  Status: {config.paused ? '🔴 Paused' : '🟢 Active'} | 
+                  Motherlode: {(config.motherlodeBalance / 1e9).toFixed(4)} SOL | 
+                  AM Treasury: {(config.autominerTreasury / 1e9).toFixed(4)} SOL
+                </p>
+              </div>
+            </div>
+          )}
         </motion.div>
       </div>
     </div>
