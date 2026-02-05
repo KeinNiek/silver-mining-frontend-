@@ -128,25 +128,7 @@ export default function Header() {
                   <HelpIcon className="w-4 h-4" /> Guide
                 </a>
 
-                {/* Mobile social links */}
-                <div className="flex items-center gap-2 px-4 pt-3 mt-2 border-t border-silver-800/50">
-                  {SOCIAL_LINKS.discord && (
-                    <a href={SOCIAL_LINKS.discord} target="_blank" rel="noopener noreferrer"
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-copper-500/10 border border-copper-500/20 text-copper-400 text-xs font-medium">
-                      <DiscordIcon className="w-4 h-4" /> Discord
-                    </a>
-                  )}
-                  <a href={SOCIAL_LINKS.twitter} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-silver-800/50 border border-silver-700/50 text-silver-300 text-xs font-medium">
-                    <XTwitterIcon className="w-3.5 h-3.5" /> Twitter
-                  </a>
-                  {SOCIAL_LINKS.telegram && (
-                    <a href={SOCIAL_LINKS.telegram} target="_blank" rel="noopener noreferrer"
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-silver-800/50 border border-silver-700/50 text-silver-300 text-xs font-medium">
-                      <TelegramIcon className="w-4 h-4" /> Telegram
-                    </a>
-                  )}
-                </div>
+                
 
                 {/* Mobile balances */}
                 {wallet.connected && (
