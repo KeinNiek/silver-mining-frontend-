@@ -19,7 +19,7 @@ export default function RiskDisclaimer() {
           
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-6 mb-8">
             <p className="text-amber-400 font-semibold text-lg">
-              ⚠️ WARNING: Using Silver Mining Protocol involves significant financial risk. 
+              WARNING: Using Silver Mining Protocol involves significant financial risk. 
               You may lose some or all of your funds. Only participate with funds you can afford to lose.
             </p>
           </div>

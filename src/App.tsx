@@ -11,6 +11,10 @@ import Dashboard from './components/Dashboard';
 import PrivacyPolicy from './components/PrivacyPolicy';
 import TermsOfService from './components/TermsOfService';
 import RiskDisclaimer from './components/RiskDisclaimer';
+import Tokenomics from './components/Tokenomics';
+import ProtocolStats from './components/ProtocolStats';
+import Help from './components/Help';
+import Explorer from './components/Explorer';
 import AdminPanel from './components/AdminPanel';
 import { useWallet } from '@solana/wallet-adapter-react';
 import '@solana/wallet-adapter-react-ui/styles.css';
@@ -18,7 +22,7 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 // Helius mainnet RPC for fast transactions
 const ENDPOINT = 'https://mainnet.helius-rpc.com/?api-key=95d3d8ea-4db8-464e-9b5b-691dd931512a';
 
-type Page = 'home' | 'privacy' | 'terms' | 'risk' | 'admin' | 'landing';
+type Page = 'home' | 'privacy' | 'terms' | 'risk' | 'admin' | 'landing' | 'tokenomics' | 'stats' | 'help' | 'explorer';
 
 function AppContent() {
   const { connected } = useWallet();
@@ -46,6 +50,10 @@ function AppContent() {
       else if (hash === 'terms') setCurrentPage('terms');
       else if (hash === 'risk') setCurrentPage('risk');
       else if (hash === 'admin') setCurrentPage('admin');
+      else if (hash === 'tokenomics') setCurrentPage('tokenomics');
+      else if (hash === 'stats') setCurrentPage('stats');
+      else if (hash === 'help') setCurrentPage('help');
+      else if (hash === 'explorer') setCurrentPage('explorer');
       else if (hash === 'landing' || sectionAnchors.includes(hash)) setCurrentPage('landing');
       else setCurrentPage('home');
     };
@@ -63,6 +71,14 @@ function AppContent() {
         return <TermsOfService />;
       case 'risk':
         return <RiskDisclaimer />;
+      case 'tokenomics':
+        return <Tokenomics />;
+      case 'stats':
+        return <ProtocolStats />;
+      case 'help':
+        return <Help />;
+      case 'explorer':
+        return <Explorer />;
       case 'admin':
         return (
           <div className="max-w-7xl mx-auto px-4 sm:px-6">
@@ -107,15 +123,13 @@ export default function App() {
         <WalletModalProvider>
           <AppContent />
           <Toaster
-            position="bottom-center"
+            position="bottom-right"
             toastOptions={{
               duration: 4000,
               style: {
                 background: '#18181b',
                 color: '#e4e4e7',
                 border: '1px solid rgba(205, 127, 90, 0.3)',
-                maxWidth: '90vw',
-                fontSize: '0.875rem',
               },
               success: { iconTheme: { primary: '#10b981', secondary: '#18181b' } },
               error: { iconTheme: { primary: '#ef4444', secondary: '#18181b' } },

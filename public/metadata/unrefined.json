@@ -1,6 +1,11 @@
 {
-  "name": "UNREFINED",
-  "symbol": "UNREFINED",
-  "description": "UNREFINED is raw ore mined within the SILVER protocol. Collect and refine it to mint SILVER through automated, verifiable mining rounds.",
-  "image": "https://www.silvermines.xyz/metadata/logo.png"
+  "name": "UNREFINED SILVER",
+  "symbol": "USILVER",
+  "description": "UNREFINED SILVER is the raw mining token of the Silver Mining Protocol on Solana. Earned by winning rounds, burnable to refine into SILVER.",
+  "image": "https://YOUR-DOMAIN.vercel.app/metadata/token-logo.png",
+  "external_url": "https://YOUR-DOMAIN.vercel.app",
+  "attributes": [
+    { "trait_type": "Category", "value": "Raw Token" },
+    { "trait_type": "Protocol", "value": "Silver Mining" }
+  ]
 }

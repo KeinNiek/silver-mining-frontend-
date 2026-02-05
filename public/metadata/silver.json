@@ -1,6 +1,11 @@
 {
   "name": "SILVER",
   "symbol": "SILVER",
-  "description": "SILVER is a decentralized mining protocol on Solana featuring verifiable randomness, automated rounds, and community-driven reward pools. Designed for transparent emissions, sustainable liquidity, and fair participation.",
-  "image": "https://www.silvermines.xyz/metadata/logo.png"
+  "description": "SILVER is the refined token of the Silver Mining Protocol on Solana. Earned by refining UNREFINED SILVER, stakeable for rewards.",
+  "image": "https://YOUR-DOMAIN.vercel.app/metadata/token-logo.png",
+  "external_url": "https://YOUR-DOMAIN.vercel.app",
+  "attributes": [
+    { "trait_type": "Category", "value": "Refined Token" },
+    { "trait_type": "Protocol", "value": "Silver Mining" }
+  ]
 }

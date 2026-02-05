@@ -44,6 +44,12 @@ interface ConfigData {
   unrefinedBump: number;
   initialized: boolean;
   paused: boolean;
+  // v2 fields
+  adminMintedSilver: number;
+  motherlodeRoundNumber: number;
+  motherlodePrize: number;
+  motherlodeWinnerKey: PublicKey;
+  motherlodeBestScore: number;
 }
 
 interface PoolData {
@@ -116,6 +122,10 @@ interface AppState {
   setCurrentBet: (bet: BetData | null) => void;
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
+  solPrice: number;
+  setSolPrice: (price: number) => void;
+  silverPrice: number;
+  setSilverPrice: (price: number) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -137,4 +147,8 @@ export const useStore = create<AppState>((set) => ({
   setCurrentBet: (currentBet) => set({ currentBet }),
   isLoading: false,
   setIsLoading: (isLoading) => set({ isLoading }),
+  solPrice: 0,
+  setSolPrice: (solPrice) => set({ solPrice }),
+  silverPrice: 0,
+  setSilverPrice: (silverPrice) => set({ silverPrice }),
 }));

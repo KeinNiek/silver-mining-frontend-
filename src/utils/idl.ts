@@ -1,4 +1,4 @@
-// Silver Mining V3.7 IDL - Updated for deployed contract with motherlode + metadata + admin mint
+// Silver Mining V3.7 IDL - Generated from deployed program (31 instructions)
 export const IDL = {
   "address": "CiKNKPpdC55EpnVD5nDF5kSHVUHu1Q3kiKUstdsHPmtV",
   "metadata": {
@@ -3345,7 +3345,7 @@ export const IDL = {
             "type": {
               "array": [
                 "pubkey",
-                100
+                25
               ]
             }
           },
@@ -3626,8 +3626,9 @@ export const IDL = {
       }
     }
   ]
-} as const;
+};
 
+// PDA seeds
 export const SEEDS = {
   CONFIG: Buffer.from("config"),
   MINER: Buffer.from("miner"),
@@ -3642,6 +3643,7 @@ export const SEEDS = {
 // Instruction discriminators (from IDL)
 export const DISCRIMINATORS = {
   adminMintSilver: Buffer.from([31, 68, 129, 57, 104, 33, 73, 185]),
+  adminResetMotherlode: Buffer.from([246, 165, 18, 244, 7, 193, 124, 42]),
   claimBetSilver: Buffer.from([46, 247, 85, 163, 116, 213, 125, 230]),
   claimRedistribution: Buffer.from([173, 164, 210, 153, 207, 123, 195, 29]),
   claimSilver: Buffer.from([204, 246, 108, 28, 241, 72, 133, 32]),
@@ -3674,7 +3676,7 @@ export const DISCRIMINATORS = {
   withdrawMotherlodeFees: Buffer.from([9, 135, 208, 85, 163, 14, 27, 30]),
 };
 
-// Account discriminators (from IDL)
+// Account discriminators
 export const ACCOUNT_DISCRIMINATORS = {
   autoMiner: Buffer.from([48, 148, 141, 250, 248, 159, 16, 132]),
   bet: Buffer.from([147, 23, 35, 59, 15, 75, 155, 32]),

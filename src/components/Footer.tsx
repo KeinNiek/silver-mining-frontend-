@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { XTwitterIcon, DiscordIcon, CopyIcon, CheckIcon } from './Icons';
+import { XTwitterIcon, DiscordIcon, TelegramIcon, CopyIcon, CheckIcon } from './Icons';
 import { SOCIAL_LINKS, WARCHEST_WALLET, ADMIN_WALLET, PROGRAM_ID } from '../utils/constants';
 
 export default function Footer() {
@@ -9,6 +9,10 @@ export default function Footer() {
 
   const navLinks = [
     { label: 'Features', href: '#features' },
+    { label: 'Tokenomics', href: '#tokenomics' },
+    { label: 'Dashboard', href: '#stats' },
+    { label: 'Explorer', href: '#explorer' },
+    { label: 'Help', href: '#help' },
     { label: 'Terms of Service', href: '#terms' },
     { label: 'Privacy Policy', href: '#privacy' },
     { label: 'Risk Disclaimer', href: '#risk' },
@@ -32,7 +36,7 @@ export default function Footer() {
 
   return (
     <footer>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 bg-#302a3d backdrop-blur-xl py-12">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 bg-silver-900/50 backdrop-blur-xl py-12">
         
         {/* Main Footer Content */}
         <div className="grid lg:grid-cols-12 gap-10 mb-12">
@@ -49,23 +53,36 @@ export default function Footer() {
             <p className="text-silver-400 text-sm leading-relaxed mb-6">
               The premier block-betting protocol on Solana. Bet on blocks, win the pot, and earn SILVER tokens.
             </p>
-            <div className="flex items-center gap-3">
-              <a 
-                href={SOCIAL_LINKS.twitter} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="w-10 h-10 rounded-lg bg-silver-800/50 hover:bg-copper-500/20 border border-silver-700/50 hover:border-copper-500/30 flex items-center justify-center text-silver-400 hover:text-copper-400 transition-all"
-              >
-                <XTwitterIcon className="w-5 h-5" />
-              </a>
+            <div className="flex flex-wrap items-center gap-2">
               <a 
                 href={SOCIAL_LINKS.discord} 
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="w-10 h-10 rounded-lg bg-silver-800/50 hover:bg-copper-500/20 border border-silver-700/50 hover:border-copper-500/30 flex items-center justify-center text-silver-400 hover:text-copper-400 transition-all"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-copper-500/15 hover:bg-copper-500/25 border border-copper-500/25 hover:border-copper-500/40 text-copper-400 hover:text-copper-300 transition-all text-sm font-medium"
               >
                 <DiscordIcon className="w-5 h-5" />
+                <span>Join Discord</span>
               </a>
+              <a 
+                href={SOCIAL_LINKS.twitter} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-silver-800/50 hover:bg-copper-500/15 border border-silver-700/50 hover:border-copper-500/30 text-silver-400 hover:text-copper-400 transition-all text-sm font-medium"
+              >
+                <XTwitterIcon className="w-4 h-4" />
+                <span>Twitter</span>
+              </a>
+              {SOCIAL_LINKS.telegram && (
+                <a 
+                  href={SOCIAL_LINKS.telegram} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-silver-800/50 hover:bg-copper-500/15 border border-silver-700/50 hover:border-copper-500/30 text-silver-400 hover:text-copper-400 transition-all text-sm font-medium"
+                >
+                  <TelegramIcon className="w-5 h-5" />
+                  <span>Telegram</span>
+                </a>
+              )}
             </div>
           </div>
 
