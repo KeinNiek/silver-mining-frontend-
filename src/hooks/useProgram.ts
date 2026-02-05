@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transaction, TransactionInstruction, ComputeBudgetProgram } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { useStore } from './useStore';
 import { PROGRAM_ID, TOKEN_DECIMALS, WARCHEST_WALLET, ADMIN_WALLET, DEFAULT_SCAN_RANGE, SOLSCAN_TX_URL } from '../utils/constants';
 import { SEEDS, DISCRIMINATORS } from '../utils/idl';
@@ -107,7 +107,7 @@ export function useProgram() {
   const { connection } = useConnection();
   const wallet = useWallet();
   const { publicKey, sendTransaction } = wallet;
-  const { setBalances, setMiner, setConfig, setRound, setPool, setAutominer, setIsLoading, config, autominer } = useStore();
+  const { setBalances, setMiner, setConfig, setRound, setPool, setAutominer, setIsLoading, config, autominer, miner: storeMiner } = useStore();
 
   // Auto-crank state
   const [autoCrankEnabled, setAutoCrankEnabled] = useState(false);
@@ -1170,8 +1170,8 @@ export function useProgram() {
       return;
     }
     // Validate against staked balance
-    if (miner && amount > (miner.stakedAmount / Math.pow(10, TOKEN_DECIMALS))) {
-      toast.error(`You only have ${(miner.stakedAmount / Math.pow(10, TOKEN_DECIMALS)).toFixed(4)} SILVER staked`);
+    if (storeMiner && amount > (storeMiner.stakedAmount / Math.pow(10, TOKEN_DECIMALS))) {
+      toast.error(`You only have ${(storeMiner.stakedAmount / Math.pow(10, TOKEN_DECIMALS)).toFixed(4)} SILVER staked`);
       return;
     }
     setIsLoading(true);
@@ -1226,7 +1226,7 @@ export function useProgram() {
     } finally {
       setIsLoading(false);
     }
-  }, [publicKey, connection, sendTransaction, miner, fetchBalances, fetchMiner, setIsLoading]);
+  }, [publicKey, connection, sendTransaction, storeMiner, fetchBalances, fetchMiner, setIsLoading]);
 
   // Claim staking rewards
   const claimRewards = useCallback(async () => {

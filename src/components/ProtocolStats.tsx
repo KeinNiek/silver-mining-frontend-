@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { motion } from 'framer-motion';
-import { PROGRAM_ID, LAMPORTS_PER_SOL, TOKEN_DECIMALS, shortenAddress, WARCHEST_WALLET, ADMIN_WALLET, SOLSCAN_ACCOUNT_URL } from '../utils/constants';
+import { PROGRAM_ID, LAMPORTS_PER_SOL, TOKEN_DECIMALS, shortenAddress, WARCHEST_WALLET, ADMIN_WALLET } from '../utils/constants';
 import { SEEDS } from '../utils/idl';
 
 // PDA helpers — identical to useProgram.ts
@@ -52,8 +52,8 @@ export default function ProtocolStats() {
   const [loadingRounds, setLoadingRounds] = useState(false);
   const [page, setPage] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [warchestBalance, setWarchestBalance] = useState<number>(0);
-  const [adminBalance, setAdminBalance] = useState<number>(0);
+  const [, setWarchestBalance] = useState<number>(0);
+  const [, setAdminBalance] = useState<number>(0);
   const ROUNDS_PER_PAGE = 25;
 
   // ─── Config parsing (offsets match useProgram.ts exactly) ────────────

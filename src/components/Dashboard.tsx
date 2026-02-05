@@ -8,9 +8,9 @@ import { useProgram } from '../hooks/useProgram';
 import { formatSOL, formatAmount, MINE_NAMES, EMISSIONS, STAKING_APR, MAX_POOL_MEMBERS, shortenAddress, ROUND_DURATION, LARGE_BET_THRESHOLD, PROGRAM_ID, UNLOCK_THRESHOLDS, CRANK_FEE_LAMPORTS, SOCIAL_LINKS, SOL_PRICE_URL, SILVER_PRICE_URL } from '../utils/constants';
 import { 
   PickaxeIcon, GemIcon, FlameIcon, TrophyIcon, ClockIcon, UsersIcon, BoltIcon,
-  ChartIcon, WalletIcon, BlockIcon, RefreshIcon, LockIcon, AlertIcon, CheckIcon, PlusIcon,
+  ChartIcon, WalletIcon, BlockIcon, RefreshIcon, AlertIcon, CheckIcon, PlusIcon,
   InfoIcon, SlotMachineIcon, WrenchIcon, DiceIcon, GasIcon, StarIcon, HistoryIcon,
-  DiscordIcon, XTwitterIcon, TelegramIcon, HelpIcon, ExternalLinkIcon, SearchIcon
+  DiscordIcon, XTwitterIcon, TelegramIcon, ExternalLinkIcon, SearchIcon
 } from './Icons';
 
 export default function Dashboard() {
@@ -22,7 +22,7 @@ export default function Dashboard() {
     finalizeRound, initializeMiner, setupAutominer, updateAutominer,
     depositAutominer, withdrawAutominer, disableAutominer,
     fetchConfig, fetchBalances, fetchMiner, fetchRound, fetchBet, fetchPool,
-    claimSol, claimRoundAll, collectMotherlode, triggerMotherlode,
+    claimSol, collectMotherlode, triggerMotherlode,
     claimAllRewards, adminResetMotherlode,
   } = useProgram();
 
@@ -32,7 +32,7 @@ export default function Dashboard() {
   const [currentBet, setCurrentBet] = useState<any>(null);
   const [previousRoundBet, setPreviousRoundBet] = useState<any>(null);
   const [previousRoundData, setPreviousRoundData] = useState<any>(null);
-  const [displayedRoundBet, setDisplayedRoundBet] = useState<any>(null);
+  const [, setDisplayedRoundBet] = useState<any>(null);
   const [stakeAmount, setStakeAmount] = useState('');
   const [unstakeAmount, setUnstakeAmount] = useState('');
   const [poolFee, setPoolFee] = useState('2.5');
@@ -51,6 +51,16 @@ export default function Dashboard() {
   const blocksCount = selectedBlocks.filter(b => b).length;
   const totalBet = blocksCount * parseFloat(solPerBlock || '0');
   const winChance = (blocksCount / 5) * 100;
+
+  // Staking validation helpers
+  const silverBalance = balances.silver / Math.pow(10, 9);
+  const stakedBalance = miner ? miner.stakedAmount / Math.pow(10, 9) : 0;
+  const stakeAmountNum = parseFloat(stakeAmount || '0');
+  const unstakeAmountNum = parseFloat(unstakeAmount || '0');
+  const showStakeOverflow = stakeAmountNum > 0 && balances.silver > 0 && stakeAmountNum > silverBalance;
+  const showUnstakeOverflow = unstakeAmountNum > 0 && !!miner && unstakeAmountNum > stakedBalance;
+  const stakeDisabled = !stakeAmount || stakeAmountNum <= 0 || isLoading || balances.silver === 0;
+  const unstakeDisabled = !unstakeAmount || unstakeAmountNum <= 0 || isLoading || !miner || miner.stakedAmount === 0;
 
   // Round timer
   useEffect(() => {
@@ -523,44 +533,40 @@ export default function Dashboard() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="label">Stake Amount</label>
-                    <span className="text-xs text-silver-500">Available: <span className="text-copper-400 font-semibold">{formatAmount(balances.silver)}</span> SILVER</span>
+                    <span className="text-xs text-silver-500">{"Available: "}<span className="text-copper-400 font-semibold">{formatAmount(balances.silver)}</span>{" SILVER"}</span>
                   </div>
                   <div className="relative">
                     <input type="number" className="input pr-20" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} min="0" step="any" />
-                    <button onClick={() => setStakeAmount(formatAmount(balances.silver, 9))}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-xs bg-copper-500/20 text-copper-400 rounded hover:bg-copper-500/30">MAX</button>
+                    <button onClick={() => setStakeAmount(formatAmount(balances.silver, 9))} className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-xs bg-copper-500/20 text-copper-400 rounded hover:bg-copper-500/30">MAX</button>
                   </div>
-                  {stakeAmount && parseFloat(stakeAmount) > 0 && balances.silver > 0 && parseFloat(stakeAmount) > balances.silver / Math.pow(10, 9) && (
+                  {showStakeOverflow && (
                     <p className="text-red-400 text-xs mt-1.5">Insufficient SILVER balance</p>
                   )}
                   {balances.silver === 0 && (
                     <p className="text-amber-400 text-xs mt-1.5">You need SILVER to stake. Refine UNREFINED to get SILVER.</p>
                   )}
                 </div>
-                <button onClick={handleStake} className="btn-primary w-full" disabled={!stakeAmount || parseFloat(stakeAmount) <= 0 || isLoading || balances.silver === 0}>
+                <button onClick={handleStake} className="btn-primary w-full" disabled={stakeDisabled}>
                   {isLoading ? 'Processing...' : 'Stake SILVER'}
                 </button>
-                
+
                 <div className="border-t border-silver-800/50 my-4 sm:my-6 pt-4 sm:pt-6">
                   <div className="flex items-center justify-between mb-2">
                     <label className="label">Unstake Amount</label>
-                    <span className="text-xs text-silver-500">Staked: <span className="text-white font-semibold">{formatAmount(miner?.stakedAmount || 0)}</span></span>
+                    <span className="text-xs text-silver-500">{"Staked: "}<span className="text-white font-semibold">{formatAmount(miner?.stakedAmount || 0)}</span></span>
                   </div>
                   <div className="relative">
                     <input type="number" className="input pr-20" placeholder="Amount to unstake" value={unstakeAmount} onChange={(e) => setUnstakeAmount(e.target.value)} min="0" step="any" />
-                    <button onClick={() => setUnstakeAmount(formatAmount(miner?.stakedAmount || 0, 9))}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-xs bg-copper-500/20 text-copper-400 rounded hover:bg-copper-500/30">MAX</button>
+                    <button onClick={() => setUnstakeAmount(formatAmount(miner?.stakedAmount || 0, 9))} className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-xs bg-copper-500/20 text-copper-400 rounded hover:bg-copper-500/30">MAX</button>
                   </div>
-                  {unstakeAmount && parseFloat(unstakeAmount) > 0 && miner && parseFloat(unstakeAmount) > miner.stakedAmount / Math.pow(10, 9) && (
+                  {showUnstakeOverflow && (
                     <p className="text-red-400 text-xs mt-1.5">Amount exceeds staked balance</p>
                   )}
                 </div>
-                <button onClick={handleUnstake} className="btn-secondary w-full" disabled={!unstakeAmount || parseFloat(unstakeAmount) <= 0 || isLoading || !miner || miner.stakedAmount === 0}>
+                <button onClick={handleUnstake} className="btn-secondary w-full" disabled={unstakeDisabled}>
                   {isLoading ? 'Processing...' : 'Unstake SILVER'}
                 </button>
-                </button>
 
-                {/* Claim All Rewards */}
                 <div className="border-t border-silver-800/50 my-4 sm:my-6 pt-4 sm:pt-6">
                   <div className="card p-4 sm:p-5 mb-4 border border-copper-500/20 bg-copper-500/5">
                     <div className="flex items-center gap-2 mb-3">

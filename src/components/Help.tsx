@@ -1,8 +1,8 @@
 import { motion } from 'framer-motion';
 import {
-  PickaxeIcon, BlockIcon, TrophyIcon, RefreshIcon,
+  PickaxeIcon, TrophyIcon,
   GemIcon, FlameIcon, UsersIcon, BoltIcon, ClockIcon,
-  AlertIcon, InfoIcon, ShieldIcon, SlotMachineIcon, StarIcon,
+  ShieldIcon, SlotMachineIcon, StarIcon,
   DiscordIcon, XTwitterIcon, TelegramIcon
 } from './Icons';
 import { SOCIAL_LINKS, UNLOCK_THRESHOLDS, MINE_NAMES, EMISSIONS } from '../utils/constants';

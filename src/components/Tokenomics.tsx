@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { PickaxeIcon, GemIcon, FlameIcon, ShieldIcon, InfoIcon, ChartIcon, StarIcon, TrophyIcon, BoltIcon, ExternalLinkIcon, CopyIcon, CheckIcon } from './Icons';
+import { PickaxeIcon, GemIcon, FlameIcon, ShieldIcon, InfoIcon, ChartIcon, StarIcon, TrophyIcon, ExternalLinkIcon, CopyIcon, CheckIcon } from './Icons';
 import { SILVER_MINT_ADDRESS, SOLSCAN_ACCOUNT_URL, PROGRAM_ID } from '../utils/constants';
 import { useState } from 'react';
 
